@@ -168,6 +168,9 @@ class TestGraphStructure:
         graph = build_axiom_graph()
         node_names = set(graph.get_graph().nodes.keys())
         # LangGraph adds __start__ and __end__ nodes.
+        assert "retriever" in node_names
+        assert "scorer" in node_names
+        assert "ranker" in node_names
         assert "synthesizer" in node_names
         assert "verifier" in node_names
 
@@ -461,3 +464,157 @@ class TestEndToEndLoop:
         nodes_in_trail = {e["node"] for e in trail}
         assert "synthesizer" in nodes_in_trail
         assert "verifier" in nodes_in_trail
+
+
+# ===========================================================================
+# D. Full pipeline integration — retriever → scorer → ranker → synth → verify
+# ===========================================================================
+
+
+class TestFullPipelineIntegration:
+    """
+    End-to-end tests that start from the retriever with mock search results,
+    flow through scorer and ranker, then into synthesizer and verifier.
+    Verifies the complete DAG wiring and audit trail accumulation.
+    """
+
+    @patch("litellm.completion")
+    def test_full_pipeline_from_retriever_to_end(self, mock_llm: MagicMock) -> None:
+        """Mock search → retriever → scorer → ranker → synth → verify → END."""
+        from nodes.retriever import MockSearchBackend, set_search_backend
+
+        # Set up search backend with results that will survive chunking.
+        set_search_backend(MockSearchBackend([
+            {
+                "url": "https://arxiv.org/batteries",
+                "content": (
+                    "Solid-state batteries replace liquid electrolytes with solid ceramics. "
+                    "This substitution significantly improves thermal stability and energy density."
+                ),
+                "title": "Solid-State Battery Review",
+            },
+        ]))
+
+        synth_json = json.dumps({
+            "is_answerable": True,
+            "sentences": [
+                {
+                    "sentence_id": "s_01",
+                    "text": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
+                    "is_cited": True,
+                    "citations": [
+                        {
+                            "citation_id": "cite_1",
+                            "chunk_id": "doc_1_chunk_A",
+                            "exact_source_quote": (
+                                "Solid-state batteries replace liquid electrolytes with solid ceramics."
+                            ),
+                        }
+                    ],
+                }
+            ],
+        })
+        semantic_json = json.dumps({
+            "tier": 1,
+            "semantic_check": "passed",
+            "failure_reason": None,
+            "reasoning": "Faithfully represents the source.",
+        })
+        mock_llm.side_effect = _make_model_router([synth_json], [semantic_json])
+
+        graph = build_axiom_graph()
+        # Start from a clean state — no pre-injected chunks.
+        state = _base_state()
+        result = graph.invoke(state)
+
+        assert result["is_answerable"] is True
+        assert len(result["final_sentences"]) == 1
+        assert result["final_sentences"][0]["verification"]["tier"] == 1
+
+        # Verify all nodes contributed to the audit trail.
+        trail = result.get("audit_trail", [])
+        nodes_in_trail = {e["node"] for e in trail}
+        assert "retriever" in nodes_in_trail
+        assert "scorer" in nodes_in_trail
+        assert "ranker" in nodes_in_trail
+        assert "synthesizer" in nodes_in_trail
+        assert "verifier" in nodes_in_trail
+
+    @patch("litellm.completion")
+    def test_full_pipeline_with_banned_domain(self, mock_llm: MagicMock) -> None:
+        """Banned domain results are filtered before reaching the synthesizer."""
+        from nodes.retriever import MockSearchBackend, set_search_backend
+
+        set_search_backend(MockSearchBackend([
+            {
+                "url": "https://spam.com/fake",
+                "content": "Spam content that should be filtered out by the retriever node.",
+                "title": "Spam",
+            },
+            {
+                "url": "https://nature.com/battery-review",
+                "content": (
+                    "Solid-state batteries replace liquid electrolytes with solid ceramics. "
+                    "This substitution significantly improves thermal stability."
+                ),
+                "title": "Nature Review",
+            },
+        ]))
+
+        synth_json = json.dumps({
+            "is_answerable": True,
+            "sentences": [
+                {
+                    "sentence_id": "s_01",
+                    "text": "Solid-state batteries use solid ceramics.",
+                    "is_cited": True,
+                    "citations": [
+                        {
+                            "citation_id": "cite_1",
+                            "chunk_id": "doc_1_chunk_A",
+                            "exact_source_quote": (
+                                "Solid-state batteries replace liquid electrolytes with solid ceramics."
+                            ),
+                        }
+                    ],
+                }
+            ],
+        })
+        semantic_json = json.dumps({
+            "tier": 2,
+            "semantic_check": "passed",
+            "failure_reason": None,
+            "reasoning": "Consensus source.",
+        })
+        mock_llm.side_effect = _make_model_router([synth_json], [semantic_json])
+
+        graph = build_axiom_graph()
+        state = _base_state(
+            app_config={"banned_domains": ["spam.com"], "expertise_level": "intermediate"},
+        )
+        result = graph.invoke(state)
+
+        # The spam.com chunk should have been filtered out.
+        banned_events = [
+            e for e in result["audit_trail"]
+            if e.get("event_type") == "retriever_banned_domain"
+        ]
+        assert len(banned_events) >= 1
+
+    @patch("litellm.completion")
+    def test_full_pipeline_empty_search_results_unanswerable(self, mock_llm: MagicMock) -> None:
+        """No search results → no chunks → synthesizer says unanswerable."""
+        from nodes.retriever import MockSearchBackend, set_search_backend
+
+        set_search_backend(MockSearchBackend([]))
+
+        unanswerable_json = json.dumps({
+            "is_answerable": False,
+            "sentences": [],
+        })
+        mock_llm.side_effect = _make_model_router([unanswerable_json], [])
+
+        graph = build_axiom_graph()
+        result = graph.invoke(_base_state())
+
+        assert result["is_answerable"] is False

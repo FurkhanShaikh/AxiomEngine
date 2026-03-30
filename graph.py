@@ -4,11 +4,11 @@ Axiom Engine v2.3 — LangGraph DAG Compilation (The Engine Core)
 Wires the nodes and conditional edges into an executable StateGraph.
 
 DAG topology:
-  retriever → synthesizer → verifier ─┐
-                 ▲                     │
-                 └── (rewrite loop) ◄──┘  (if Tier 4/5 failures & loop < 3)
-                                       │
-                                       └──► END  (all passed / unanswerable / loop exhausted)
+  retriever → scorer → ranker → synthesizer → verifier ─┐
+                                     ▲                   │
+                                     └── (rewrite loop) ◄┘  (if Tier 4/5 & loop < 3)
+                                                         │
+                                                         └──► END  (all passed / unanswerable / loop exhausted)
 """
 
 from __future__ import annotations
@@ -17,6 +17,9 @@ from typing import Literal
 
 from langgraph.graph import END, StateGraph
 
+from nodes.ranker import ranker_node
+from nodes.retriever import retriever_node
+from nodes.scorer import scorer_node
 from nodes.synthesizer import synthesizer_node
 from nodes.verification import verification_node
 from state import GraphState
@@ -72,11 +75,17 @@ def build_axiom_graph() -> StateGraph:
     workflow = StateGraph(GraphState)
 
     # Add nodes
+    workflow.add_node("retriever", retriever_node)
+    workflow.add_node("scorer", scorer_node)
+    workflow.add_node("ranker", ranker_node)
     workflow.add_node("synthesizer", synthesizer_node)
     workflow.add_node("verifier", verification_node)
 
-    # Linear edges
-    workflow.set_entry_point("synthesizer")
+    # Linear edges — full pipeline
+    workflow.set_entry_point("retriever")
+    workflow.add_edge("retriever", "scorer")
+    workflow.add_edge("scorer", "ranker")
+    workflow.add_edge("ranker", "synthesizer")
     workflow.add_edge("synthesizer", "verifier")
 
     # Conditional edge — the verification loop

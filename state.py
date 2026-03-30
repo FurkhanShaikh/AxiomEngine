@@ -39,6 +39,14 @@ class GraphState(TypedDict):
     indexed_chunks: Annotated[Sequence[dict], operator.add]
 
     # ------------------------------------------------------------------
+    # SCORING & RANKING STATE
+    # ------------------------------------------------------------------
+    # Chunks after source quality scoring (domain authority + consistency).
+    scored_chunks: list[dict]
+    # Chunks ranked by relevance to the user query, trimmed to top-N.
+    ranked_chunks: list[dict]
+
+    # ------------------------------------------------------------------
     # COGNITIVE STATE
     # ------------------------------------------------------------------
     is_answerable: bool
@@ -87,6 +95,8 @@ def make_initial_state(
         pipeline_config=pipeline_config,
         search_queries=[],
         indexed_chunks=[],
+        scored_chunks=[],
+        ranked_chunks=[],
         is_answerable=True,
         draft_sentences=[],
         rewrite_requests=[],
