@@ -1,0 +1,5 @@
+# Phase 1 — Data Models & State
+pydantic>=2.10,<3.0
+
+# Testing
+pytest>=8.4,<9.0
