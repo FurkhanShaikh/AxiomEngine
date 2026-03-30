@@ -51,6 +51,10 @@ class GraphState(TypedDict):
     # operator.add — each verification pass appends new rewrite requests
     # so the Synthesizer can see the full correction history.
     rewrite_requests: Annotated[Sequence[str], operator.add]
+    # Overwritten each pass — number of NEW rewrite requests from the
+    # most recent verification pass. Used by route_post_verification to
+    # decide whether to loop (accumulated list is for correction context).
+    pending_rewrite_count: int
     # Incremented by the verification node on every loop iteration.
     loop_count: int
 
@@ -86,6 +90,7 @@ def make_initial_state(
         is_answerable=True,
         draft_sentences=[],
         rewrite_requests=[],
+        pending_rewrite_count=0,
         loop_count=0,
         final_sentences=[],
         audit_trail=[],

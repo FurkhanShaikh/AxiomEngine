@@ -1,5 +1,11 @@
 # Phase 1 — Data Models & State
 pydantic>=2.10,<3.0
 
+# Phase 3 — LLM Nodes
+litellm>=1.82,<2.0
+
+# Phase 4 — Graph Wiring
+langgraph>=1.1,<2.0
+
 # Testing
 pytest>=8.4,<9.0

@@ -423,6 +423,7 @@ class TestGraphState:
             "is_answerable",
             "draft_sentences",
             "rewrite_requests",
+            "pending_rewrite_count",
             "loop_count",
             "final_sentences",
             "audit_trail",
