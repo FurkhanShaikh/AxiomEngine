@@ -1,16 +1,12 @@
-# Phase 1 — Data Models & State
+# Data Models & State
 pydantic>=2.10,<3.0
 
-# Phase 3 — LLM Nodes
+# LLM Nodes
 litellm>=1.82,<2.0
 
-# Phase 4 — Graph Wiring
+# Graph Wiring
 langgraph>=1.1,<2.0
 
-# Phase 5 — API Gateway
+# API Gateway
 fastapi>=0.115,<1.0
 uvicorn>=0.32,<1.0
-
-# Testing
-pytest>=8.4,<9.0
-httpx>=0.27,<1.0

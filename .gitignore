@@ -29,6 +29,9 @@ pyrightconfig.json
 .vscode/
 .idea/
 
+# Claude Code local settings (machine-specific, not for version control)
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db
