@@ -180,7 +180,7 @@ def scorer_node(state: GraphState) -> dict[str, Any]:
     Returns keys: scored_chunks, audit_trail
     """
     audit: list[dict[str, Any]] = []
-    indexed_chunks: list[dict] = state.get("indexed_chunks") or []
+    indexed_chunks: list[dict] = list(state.get("indexed_chunks") or [])
     app_cfg: dict = state.get("app_config") or {}
 
     authoritative, low_quality = _build_domain_sets(app_cfg)

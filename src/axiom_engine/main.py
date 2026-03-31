@@ -18,13 +18,18 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 
 from axiom_engine.config.logging import configure_logging
 from axiom_engine.graph import build_axiom_graph
@@ -42,6 +47,17 @@ from axiom_engine.state import make_initial_state
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger("axiom_engine")
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+# Configurable via env var; default is 20 requests/minute per IP.
+# Set AXIOM_RATE_LIMIT=100/minute in production if needed.
+_RATE_LIMIT = os.environ.get("AXIOM_RATE_LIMIT", "20/minute")
+
+limiter = Limiter(key_func=get_remote_address, default_limits=[_RATE_LIMIT])
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +164,7 @@ def compute_confidence_summary(
 def determine_status(
     is_answerable: bool,
     final_sentences: list[dict[str, Any]],
-) -> str:
+) -> Literal["success", "partial", "unanswerable", "error"]:
     """
     Determine the response status string.
 
@@ -247,6 +263,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+
 
 # ---------------------------------------------------------------------------
 # Global exception handler (architecture §7, Category 1)
@@ -282,11 +302,13 @@ async def unhandled_exception_handler(
 # ---------------------------------------------------------------------------
 
 @app.get("/health", summary="Liveness / readiness probe.")
+@limiter.exempt
 async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
 @app.get("/metrics", summary="Basic runtime metrics for ops dashboards.")
+@limiter.exempt
 async def metrics() -> dict[str, Any]:
     """
     Returns request counts, cache hit rate, tier distribution, and uptime.

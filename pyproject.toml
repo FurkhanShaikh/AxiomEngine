@@ -9,6 +9,7 @@ dependencies = [
     "langgraph>=1.1,<2.0",
     "fastapi>=0.115,<1.0",
     "uvicorn>=0.32,<1.0",
+    "slowapi>=0.1.9",
 ]
 
 [project.optional-dependencies]
@@ -40,3 +41,10 @@ ignore = []
 
 [tool.ruff.lint.isort]
 known-first-party = ["axiom_engine"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+# Not strict — incremental adoption. Tighten per module as coverage grows.
+warn_unused_ignores = true
+warn_return_any = false

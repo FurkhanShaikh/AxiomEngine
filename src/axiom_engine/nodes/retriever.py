@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import re
 import string
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -195,6 +196,21 @@ def set_search_backend(backend: SearchBackend) -> None:
     _search_backend = backend
 
 
+def _safe_search(
+    query: str,
+) -> tuple[str, list[dict[str, Any]], Exception | None]:
+    """
+    Execute one search query, capturing any exception so a single-query
+    failure does not abort the other parallel searches.
+
+    Returns (query, results, error_or_None).
+    """
+    try:
+        return query, _search_backend.search(query), None
+    except Exception as exc:
+        return query, [], exc
+
+
 def retriever_node(state: GraphState) -> dict[str, Any]:
     """
     LangGraph node — Retrieval & Indexing.
@@ -229,10 +245,13 @@ def retriever_node(state: GraphState) -> dict[str, Any]:
     seen_urls: set[str] = set()
     seen_chunk_hashes: set[str] = set()
 
-    for query in queries:
-        try:
-            results = _search_backend.search(query)
-        except Exception as exc:
+    # Run all search queries in parallel; results arrive in submission order
+    # so doc_counter assignment is deterministic across calls.
+    with ThreadPoolExecutor(max_workers=len(queries)) as executor:
+        search_outcomes = list(executor.map(_safe_search, queries))
+
+    for query, results, exc in search_outcomes:
+        if exc is not None:
             audit.append(
                 _make_audit_event(
                     "retriever_search_error",

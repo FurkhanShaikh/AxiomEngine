@@ -238,7 +238,7 @@ def synthesizer_node(state: GraphState) -> dict[str, Any]:
                 temperature=0.0,  # deterministic output for citation integrity
             )
             response = litellm.completion(**completion_kwargs)
-            raw_content: str = response.choices[0].message.content or ""
+            raw_content = response.choices[0].message.content or ""
             output = _parse_llm_response(raw_content)
             break
 

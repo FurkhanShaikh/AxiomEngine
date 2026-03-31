@@ -31,6 +31,7 @@ format:
 lint:
 	$(PYTHON) -m ruff check src tests
 	$(PYTHON) -m ruff format --check src tests
+	$(PYTHON) -m mypy src
 
 clean:
 	if exist $(VENV) rmdir /s /q $(VENV)

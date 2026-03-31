@@ -34,7 +34,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 import litellm
@@ -261,13 +261,19 @@ def _verify_citation(
             None,
         )
 
-    tier: int = data["tier"]
-    semantic_check: str = data["semantic_check"]
+    tier = cast(Literal[1, 2, 3, 4, 6], data["tier"])
+    semantic_check = cast(Literal["passed", "failed"], data["semantic_check"])
     failure_reason: str | None = data.get("failure_reason")
 
     vr = VerificationResult(
         tier=tier,
-        tier_label=_TIER_LABELS[tier],
+        tier_label=cast(
+            Literal[
+                "authoritative", "consensus", "model_assisted",
+                "misrepresented", "hallucinated", "conflicted",
+            ],
+            _TIER_LABELS[tier],
+        ),
         mechanical_check="passed",   # Semantic only runs after mechanical pass
         semantic_check=semantic_check,
         failure_reason=failure_reason,
@@ -315,7 +321,7 @@ def semantic_verifier_node(state: GraphState) -> dict[str, Any]:
     chunk_lookup: dict[str, dict] = {c["chunk_id"]: c for c in indexed_chunks}
 
     # mechanical_results: dict[citation_id, "passed"|"failed"] — set by verifier node
-    mechanical_results: dict[str, str] = state.get("mechanical_results") or {}
+    mechanical_results: dict[str, str] = cast(dict[str, str], state.get("mechanical_results") or {})
 
     audit.append(
         _make_audit_event(

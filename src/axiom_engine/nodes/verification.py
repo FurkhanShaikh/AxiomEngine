@@ -20,7 +20,7 @@ mechanical_results, audit_trail
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from axiom_engine.nodes.semantic import semantic_verifier_node
@@ -156,8 +156,7 @@ def verification_node(state: GraphState) -> dict[str, Any]:
     # ------------------------------------------------------------------
     # Build an intermediate state with mechanical_results injected so the
     # semantic node knows which citations to skip.
-    semantic_input_state = dict(state)
-    semantic_input_state["mechanical_results"] = mechanical_results
+    semantic_input_state = cast(GraphState, {**state, "mechanical_results": mechanical_results})
 
     semantic_result = semantic_verifier_node(semantic_input_state)
 

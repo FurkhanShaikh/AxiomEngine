@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Literal
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from axiom_engine.nodes.ranker import ranker_node
 from axiom_engine.nodes.retriever import retriever_node
@@ -96,7 +97,7 @@ def retriever_with_retry(state: GraphState) -> dict:
 # Graph compilation
 # ---------------------------------------------------------------------------
 
-def build_axiom_graph() -> StateGraph:
+def build_axiom_graph() -> CompiledStateGraph:
     """
     Construct and compile the Axiom Engine LangGraph DAG.
 
