@@ -15,7 +15,7 @@ help:
 
 install:
 	python -m venv $(VENV)
-	$(PIP) install -r requirements.txt -r requirements-dev.txt
+	$(PIP) install -e ".[dev]"
 	@echo "Installation complete. Activate via: .venv\Scripts\activate"
 
 run:
