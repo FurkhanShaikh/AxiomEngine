@@ -12,14 +12,18 @@ Responsibilities:
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from collections import Counter
-from datetime import datetime, timezone
+from functools import partial
 from typing import Any
-from uuid import uuid4
 
 from axiom_engine.state import GraphState
+from axiom_engine.utils.audit import make_audit_event
+
+_audit = partial(make_audit_event, "ranker")
+logger = logging.getLogger("axiom_engine.ranker")
 
 # ---------------------------------------------------------------------------
 # Text tokenization for keyword matching
@@ -29,15 +33,82 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 # Common English stopwords to exclude from relevance scoring.
 _STOPWORDS: set[str] = {
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "can", "shall", "to", "of", "in", "for",
-    "on", "with", "at", "by", "from", "as", "into", "about", "between",
-    "through", "after", "before", "during", "without", "and", "or", "but",
-    "not", "no", "if", "then", "than", "that", "this", "it", "its",
-    "what", "which", "who", "whom", "how", "when", "where", "why",
-    "all", "each", "every", "both", "few", "more", "most", "some",
-    "such", "only", "very", "just", "so", "also",
+    "a",
+    "an",
+    "the",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "can",
+    "shall",
+    "to",
+    "of",
+    "in",
+    "for",
+    "on",
+    "with",
+    "at",
+    "by",
+    "from",
+    "as",
+    "into",
+    "about",
+    "between",
+    "through",
+    "after",
+    "before",
+    "during",
+    "without",
+    "and",
+    "or",
+    "but",
+    "not",
+    "no",
+    "if",
+    "then",
+    "than",
+    "that",
+    "this",
+    "it",
+    "its",
+    "what",
+    "which",
+    "who",
+    "whom",
+    "how",
+    "when",
+    "where",
+    "why",
+    "all",
+    "each",
+    "every",
+    "both",
+    "few",
+    "more",
+    "most",
+    "some",
+    "such",
+    "only",
+    "very",
+    "just",
+    "so",
+    "also",
 }
 
 
@@ -52,8 +123,8 @@ def _tokenize(text: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 # BM25 tuning parameters.
-_BM25_K1 = 1.2   # Term frequency saturation
-_BM25_B = 0.75   # Length normalization strength
+_BM25_K1 = 1.2  # Term frequency saturation
+_BM25_B = 0.75  # Length normalization strength
 
 
 def _compute_idf(term: str, doc_token_sets: list[set[str]], n_docs: int) -> float:
@@ -123,26 +194,7 @@ _QUALITY_WEIGHT = 0.4
 
 def compute_ranking_score(relevance: float, quality: float) -> float:
     """Weighted combination of relevance and quality for final ranking."""
-    return round(
-        _RELEVANCE_WEIGHT * relevance + _QUALITY_WEIGHT * quality, 4
-    )
-
-
-# ---------------------------------------------------------------------------
-# Audit helper
-# ---------------------------------------------------------------------------
-
-def _make_audit_event(
-    event_type: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "event_id": str(uuid4()),
-        "node": "ranker",
-        "event_type": event_type,
-        "payload": payload,
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-    }
+    return round(_RELEVANCE_WEIGHT * relevance + _QUALITY_WEIGHT * quality, 4)
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +223,7 @@ def ranker_node(state: GraphState) -> dict[str, Any]:
     max_ranked: int = stages_cfg.get("max_ranked_chunks", _DEFAULT_MAX_RANKED)
 
     audit.append(
-        _make_audit_event(
+        _audit(
             "ranker_start",
             {
                 "input_chunk_count": len(scored_chunks),
@@ -217,7 +269,7 @@ def ranker_node(state: GraphState) -> dict[str, Any]:
     trimmed = ranked[:max_ranked]
 
     audit.append(
-        _make_audit_event(
+        _audit(
             "ranker_complete",
             {
                 "total_scored": len(ranked),

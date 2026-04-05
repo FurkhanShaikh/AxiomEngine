@@ -8,7 +8,8 @@ overwriting previously approved state.
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Sequence, TypedDict
+from collections.abc import Sequence
+from typing import Annotated, TypedDict
 
 
 class GraphState(TypedDict):
@@ -26,9 +27,9 @@ class GraphState(TypedDict):
     # ------------------------------------------------------------------
     request_id: str
     user_query: str
-    app_config: dict          # Serialised AppConfig
-    models_config: dict       # Serialised ModelConfig
-    pipeline_config: dict     # Serialised PipelineConfig
+    app_config: dict  # Serialised AppConfig
+    models_config: dict  # Serialised ModelConfig
+    pipeline_config: dict  # Serialised PipelineConfig
 
     # ------------------------------------------------------------------
     # RETRIEVAL STATE

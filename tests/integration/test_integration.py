@@ -23,7 +23,6 @@ from fastapi.testclient import TestClient
 
 from axiom_engine.main import app
 from axiom_engine.nodes.retriever import MockSearchBackend, set_search_backend
-from axiom_engine.state import make_initial_state
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -43,17 +42,21 @@ def _ollama_available() -> bool:
     """Check if Ollama is reachable."""
     try:
         import httpx
+
         resp = httpx.get(f"{_OLLAMA_BASE}/api/tags", timeout=3)
         return resp.status_code == 200
     except Exception:
         return False
 
 
-# Skip all tests in this module if Ollama isn't running.
-pytestmark = pytest.mark.skipif(
-    not _ollama_available(),
-    reason="Ollama not available on localhost:11434",
-)
+# Skip all tests in this module if Ollama isn't running, and mark as integration.
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not _ollama_available(),
+        reason="Ollama not available on localhost:11434",
+    ),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -160,15 +163,17 @@ class TestLiveFullPipeline:
         # Confidence score should be positive.
         assert data["confidence_summary"]["overall_score"] > 0.0
 
-        print(f"\n--- Live Pipeline Result ---")
+        print("\n--- Live Pipeline Result ---")
         print(f"Status: {data['status']}")
         print(f"Confidence: {data['confidence_summary']['overall_score']}")
         print(f"Sentences: {len(data['final_response'])}")
         for s in data["final_response"]:
             v = s["verification"]
-            print(f"  [{s['sentence_id']}] Tier {v['tier']} ({v['tier_label']}) "
-                  f"mech={v['mechanical_check']} sem={v['semantic_check']}")
-            print(f"    \"{s['text'][:100]}\"")
+            print(
+                f"  [{s['sentence_id']}] Tier {v['tier']} ({v['tier_label']}) "
+                f"mech={v['mechanical_check']} sem={v['semantic_check']}"
+            )
+            print(f'    "{s["text"][:100]}"')
 
     def test_unanswerable_query_triggers_escape_hatch(self, client: TestClient) -> None:
         """
@@ -203,10 +208,12 @@ class TestLiveFullPipeline:
             f"Unexpected status: {data['status']}, error={data.get('error_message')}"
         )
 
-        print(f"\n--- Escape Hatch Test ---")
+        print("\n--- Escape Hatch Test ---")
         print(f"Status: {data['status']}, is_answerable: {data['is_answerable']}")
 
-    def test_mechanical_verification_catches_real_llm_hallucination(self, client: TestClient) -> None:
+    def test_mechanical_verification_catches_real_llm_hallucination(
+        self, client: TestClient
+    ) -> None:
         """
         The mechanical verifier should verify that exact_source_quote
         actually appears in the source chunk. This tests the real pipeline
@@ -230,12 +237,13 @@ class TestLiveFullPipeline:
                     f"Expected mechanical_check to run, got {v['mechanical_check']}"
                 )
 
-        print(f"\n--- Mechanical Verification Test ---")
+        print("\n--- Mechanical Verification Test ---")
         tier_counts = data["confidence_summary"]["tier_breakdown"]
         print(f"Tier breakdown: {json.dumps(tier_counts)}")
         mech_results = [
             (s["sentence_id"], s["verification"]["mechanical_check"])
-            for s in data["final_response"] if s["is_cited"]
+            for s in data["final_response"]
+            if s["is_cited"]
         ]
         print(f"Mechanical results: {mech_results}")
 
@@ -256,7 +264,7 @@ class TestLiveFullPipeline:
         total = sum(tb[f"tier_{i}_claims"] for i in range(1, 7))
         assert total == len(data["final_response"])
 
-        print(f"\n--- Confidence Score Test ---")
+        print("\n--- Confidence Score Test ---")
         print(f"Overall: {cs['overall_score']}, Claims: {total}")
 
     def test_response_conforms_to_axiom_response_schema(self, client: TestClient) -> None:

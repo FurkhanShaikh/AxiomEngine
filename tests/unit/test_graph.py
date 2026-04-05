@@ -30,6 +30,7 @@ _VERIFIER_MODEL = "gpt-4o-mini"
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _mock_litellm_response(content: str) -> MagicMock:
     message = MagicMock()
     message.content = content
@@ -210,31 +211,35 @@ class TestEndToEndLoop:
     @patch("litellm.completion")
     def test_happy_path_single_pass(self, mock_llm: MagicMock) -> None:
         """Correct verbatim quote → mechanical pass → semantic pass → END."""
-        synth_json = json.dumps({
-            "is_answerable": True,
-            "sentences": [
-                {
-                    "sentence_id": "s_01",
-                    "text": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
-                    "is_cited": True,
-                    "citations": [
-                        {
-                            "citation_id": "cite_1",
-                            "chunk_id": "doc_1_chunk_A",
-                            "exact_source_quote": (
-                                "Solid-state batteries replace liquid electrolytes with solid ceramics."
-                            ),
-                        }
-                    ],
-                }
-            ],
-        })
-        semantic_json = json.dumps({
-            "tier": 1,
-            "semantic_check": "passed",
-            "failure_reason": None,
-            "reasoning": "Claim faithfully represents the authoritative source.",
-        })
+        synth_json = json.dumps(
+            {
+                "is_answerable": True,
+                "sentences": [
+                    {
+                        "sentence_id": "s_01",
+                        "text": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
+                        "is_cited": True,
+                        "citations": [
+                            {
+                                "citation_id": "cite_1",
+                                "chunk_id": "doc_1_chunk_A",
+                                "exact_source_quote": (
+                                    "Solid-state batteries replace liquid electrolytes with solid ceramics."
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        semantic_json = json.dumps(
+            {
+                "tier": 1,
+                "semantic_check": "passed",
+                "failure_reason": None,
+                "reasoning": "Claim faithfully represents the authoritative source.",
+            }
+        )
         mock_llm.side_effect = _make_model_router([synth_json], [semantic_json])
 
         graph = build_axiom_graph()
@@ -251,48 +256,54 @@ class TestEndToEndLoop:
         Pass 1: Fabricated quote → Mechanical Tier 5 → loops back.
         Pass 2: Corrected verbatim quote → passes → END.
         """
-        hallucinated_json = json.dumps({
-            "is_answerable": True,
-            "sentences": [
-                {
-                    "sentence_id": "s_01",
-                    "text": "Solid-state batteries use ceramic electrolytes.",
-                    "is_cited": True,
-                    "citations": [
-                        {
-                            "citation_id": "cite_1",
-                            "chunk_id": "doc_1_chunk_A",
-                            "exact_source_quote": "This quote is completely fabricated and does not exist.",
-                        }
-                    ],
-                }
-            ],
-        })
-        corrected_json = json.dumps({
-            "is_answerable": True,
-            "sentences": [
-                {
-                    "sentence_id": "s_01",
-                    "text": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
-                    "is_cited": True,
-                    "citations": [
-                        {
-                            "citation_id": "cite_1",
-                            "chunk_id": "doc_1_chunk_A",
-                            "exact_source_quote": (
-                                "Solid-state batteries replace liquid electrolytes with solid ceramics."
-                            ),
-                        }
-                    ],
-                }
-            ],
-        })
-        semantic_json = json.dumps({
-            "tier": 1,
-            "semantic_check": "passed",
-            "failure_reason": None,
-            "reasoning": "Claim faithfully represents the source.",
-        })
+        hallucinated_json = json.dumps(
+            {
+                "is_answerable": True,
+                "sentences": [
+                    {
+                        "sentence_id": "s_01",
+                        "text": "Solid-state batteries use ceramic electrolytes.",
+                        "is_cited": True,
+                        "citations": [
+                            {
+                                "citation_id": "cite_1",
+                                "chunk_id": "doc_1_chunk_A",
+                                "exact_source_quote": "This quote is completely fabricated and does not exist.",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        corrected_json = json.dumps(
+            {
+                "is_answerable": True,
+                "sentences": [
+                    {
+                        "sentence_id": "s_01",
+                        "text": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
+                        "is_cited": True,
+                        "citations": [
+                            {
+                                "citation_id": "cite_1",
+                                "chunk_id": "doc_1_chunk_A",
+                                "exact_source_quote": (
+                                    "Solid-state batteries replace liquid electrolytes with solid ceramics."
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        semantic_json = json.dumps(
+            {
+                "tier": 1,
+                "semantic_check": "passed",
+                "failure_reason": None,
+                "reasoning": "Claim faithfully represents the source.",
+            }
+        )
         mock_llm.side_effect = _make_model_router(
             [hallucinated_json, corrected_json],
             [semantic_json],  # Only called on pass 2 (pass 1 fails mechanical)
@@ -309,10 +320,12 @@ class TestEndToEndLoop:
     @patch("litellm.completion")
     def test_escape_hatch_terminates_immediately(self, mock_llm: MagicMock) -> None:
         """is_answerable=false → END without entering verification."""
-        unanswerable_json = json.dumps({
-            "is_answerable": False,
-            "sentences": [],
-        })
+        unanswerable_json = json.dumps(
+            {
+                "is_answerable": False,
+                "sentences": [],
+            }
+        )
         mock_llm.side_effect = _make_model_router([unanswerable_json], [])
 
         graph = build_axiom_graph()
@@ -326,23 +339,25 @@ class TestEndToEndLoop:
         """
         Synthesizer keeps hallucinating. After 3 loops the graph terminates.
         """
-        hallucinated_json = json.dumps({
-            "is_answerable": True,
-            "sentences": [
-                {
-                    "sentence_id": "s_01",
-                    "text": "Some claim.",
-                    "is_cited": True,
-                    "citations": [
-                        {
-                            "citation_id": "cite_1",
-                            "chunk_id": "doc_1_chunk_A",
-                            "exact_source_quote": "This fabricated quote never appears in the chunk.",
-                        }
-                    ],
-                }
-            ],
-        })
+        hallucinated_json = json.dumps(
+            {
+                "is_answerable": True,
+                "sentences": [
+                    {
+                        "sentence_id": "s_01",
+                        "text": "Some claim.",
+                        "is_cited": True,
+                        "citations": [
+                            {
+                                "citation_id": "cite_1",
+                                "chunk_id": "doc_1_chunk_A",
+                                "exact_source_quote": "This fabricated quote never appears in the chunk.",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
         # 3 synthesis calls, all hallucinated. No semantic calls (mechanical fails).
         mock_llm.side_effect = _make_model_router(
             [hallucinated_json] * 3,
@@ -362,56 +377,64 @@ class TestEndToEndLoop:
         Mechanical passes but semantic finds misrepresentation (Tier 4).
         Graph loops back for a rewrite, second pass succeeds.
         """
-        synth_json = json.dumps({
-            "is_answerable": True,
-            "sentences": [
-                {
-                    "sentence_id": "s_01",
-                    "text": "Solid-state batteries have perfect thermal stability.",
-                    "is_cited": True,
-                    "citations": [
-                        {
-                            "citation_id": "cite_1",
-                            "chunk_id": "doc_1_chunk_A",
-                            "exact_source_quote": (
-                                "This substitution significantly improves thermal stability and energy density."
-                            ),
-                        }
-                    ],
-                }
-            ],
-        })
-        corrected_json = json.dumps({
-            "is_answerable": True,
-            "sentences": [
-                {
-                    "sentence_id": "s_01",
-                    "text": "This substitution significantly improves thermal stability and energy density.",
-                    "is_cited": True,
-                    "citations": [
-                        {
-                            "citation_id": "cite_1",
-                            "chunk_id": "doc_1_chunk_A",
-                            "exact_source_quote": (
-                                "This substitution significantly improves thermal stability and energy density."
-                            ),
-                        }
-                    ],
-                }
-            ],
-        })
-        tier4_json = json.dumps({
-            "tier": 4,
-            "semantic_check": "failed",
-            "failure_reason": "Claim overstates 'improves' as 'perfect'.",
-            "reasoning": "The source says 'improves' not 'perfect'.",
-        })
-        tier1_json = json.dumps({
-            "tier": 1,
-            "semantic_check": "passed",
-            "failure_reason": None,
-            "reasoning": "Claim now faithfully represents the source.",
-        })
+        synth_json = json.dumps(
+            {
+                "is_answerable": True,
+                "sentences": [
+                    {
+                        "sentence_id": "s_01",
+                        "text": "Solid-state batteries have perfect thermal stability.",
+                        "is_cited": True,
+                        "citations": [
+                            {
+                                "citation_id": "cite_1",
+                                "chunk_id": "doc_1_chunk_A",
+                                "exact_source_quote": (
+                                    "This substitution significantly improves thermal stability and energy density."
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        corrected_json = json.dumps(
+            {
+                "is_answerable": True,
+                "sentences": [
+                    {
+                        "sentence_id": "s_01",
+                        "text": "This substitution significantly improves thermal stability and energy density.",
+                        "is_cited": True,
+                        "citations": [
+                            {
+                                "citation_id": "cite_1",
+                                "chunk_id": "doc_1_chunk_A",
+                                "exact_source_quote": (
+                                    "This substitution significantly improves thermal stability and energy density."
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        tier4_json = json.dumps(
+            {
+                "tier": 4,
+                "semantic_check": "failed",
+                "failure_reason": "Claim overstates 'improves' as 'perfect'.",
+                "reasoning": "The source says 'improves' not 'perfect'.",
+            }
+        )
+        tier1_json = json.dumps(
+            {
+                "tier": 1,
+                "semantic_check": "passed",
+                "failure_reason": None,
+                "reasoning": "Claim now faithfully represents the source.",
+            }
+        )
         mock_llm.side_effect = _make_model_router(
             [synth_json, corrected_json],
             [tier4_json, tier1_json],
@@ -426,45 +449,54 @@ class TestEndToEndLoop:
     @patch("litellm.completion")
     def test_audit_trail_accumulates_across_loops(self, mock_llm: MagicMock) -> None:
         """The audit_trail must accumulate events from every pass, never overwrite."""
-        hallucinated_json = json.dumps({
-            "is_answerable": True,
-            "sentences": [
-                {
-                    "sentence_id": "s_01",
-                    "text": "Claim.",
-                    "is_cited": True,
-                    "citations": [
-                        {
-                            "citation_id": "cite_1",
-                            "chunk_id": "doc_1_chunk_A",
-                            "exact_source_quote": "Fabricated nonsense that does not exist in chunk.",
-                        }
-                    ],
-                }
-            ],
-        })
-        corrected_json = json.dumps({
-            "is_answerable": True,
-            "sentences": [
-                {
-                    "sentence_id": "s_01",
-                    "text": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
-                    "is_cited": True,
-                    "citations": [
-                        {
-                            "citation_id": "cite_1",
-                            "chunk_id": "doc_1_chunk_A",
-                            "exact_source_quote": (
-                                "Solid-state batteries replace liquid electrolytes with solid ceramics."
-                            ),
-                        }
-                    ],
-                }
-            ],
-        })
-        semantic_json = json.dumps({
-            "tier": 1, "semantic_check": "passed", "failure_reason": None, "reasoning": "ok"
-        })
+        hallucinated_json = json.dumps(
+            {
+                "is_answerable": True,
+                "sentences": [
+                    {
+                        "sentence_id": "s_01",
+                        "text": "Claim.",
+                        "is_cited": True,
+                        "citations": [
+                            {
+                                "citation_id": "cite_1",
+                                "chunk_id": "doc_1_chunk_A",
+                                "exact_source_quote": "Fabricated nonsense that does not exist in chunk.",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        corrected_json = json.dumps(
+            {
+                "is_answerable": True,
+                "sentences": [
+                    {
+                        "sentence_id": "s_01",
+                        "text": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
+                        "is_cited": True,
+                        "citations": [
+                            {
+                                "citation_id": "cite_1",
+                                "chunk_id": "doc_1_chunk_A",
+                                "exact_source_quote": (
+                                    "Solid-state batteries replace liquid electrolytes with solid ceramics."
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        semantic_json = json.dumps(
+            {
+                "tier": 1,
+                "semantic_check": "passed",
+                "failure_reason": None,
+                "reasoning": "ok",
+            }
+        )
         mock_llm.side_effect = _make_model_router(
             [hallucinated_json, corrected_json],
             [semantic_json],
@@ -498,42 +530,50 @@ class TestFullPipelineIntegration:
         from axiom_engine.nodes.retriever import MockSearchBackend, set_search_backend
 
         # Set up search backend with results that will survive chunking.
-        set_search_backend(MockSearchBackend([
-            {
-                "url": "https://arxiv.org/batteries",
-                "content": (
-                    "Solid-state batteries replace liquid electrolytes with solid ceramics. "
-                    "This substitution significantly improves thermal stability and energy density."
-                ),
-                "title": "Solid-State Battery Review",
-            },
-        ]))
+        set_search_backend(
+            MockSearchBackend(
+                [
+                    {
+                        "url": "https://arxiv.org/batteries",
+                        "content": (
+                            "Solid-state batteries replace liquid electrolytes with solid ceramics. "
+                            "This substitution significantly improves thermal stability and energy density."
+                        ),
+                        "title": "Solid-State Battery Review",
+                    },
+                ]
+            )
+        )
 
-        synth_json = json.dumps({
-            "is_answerable": True,
-            "sentences": [
-                {
-                    "sentence_id": "s_01",
-                    "text": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
-                    "is_cited": True,
-                    "citations": [
-                        {
-                            "citation_id": "cite_1",
-                            "chunk_id": "doc_1_chunk_A",
-                            "exact_source_quote": (
-                                "Solid-state batteries replace liquid electrolytes with solid ceramics."
-                            ),
-                        }
-                    ],
-                }
-            ],
-        })
-        semantic_json = json.dumps({
-            "tier": 1,
-            "semantic_check": "passed",
-            "failure_reason": None,
-            "reasoning": "Faithfully represents the source.",
-        })
+        synth_json = json.dumps(
+            {
+                "is_answerable": True,
+                "sentences": [
+                    {
+                        "sentence_id": "s_01",
+                        "text": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
+                        "is_cited": True,
+                        "citations": [
+                            {
+                                "citation_id": "cite_1",
+                                "chunk_id": "doc_1_chunk_A",
+                                "exact_source_quote": (
+                                    "Solid-state batteries replace liquid electrolytes with solid ceramics."
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        semantic_json = json.dumps(
+            {
+                "tier": 1,
+                "semantic_check": "passed",
+                "failure_reason": None,
+                "reasoning": "Faithfully represents the source.",
+            }
+        )
         mock_llm.side_effect = _make_model_router([synth_json], [semantic_json])
 
         graph = build_axiom_graph()
@@ -559,59 +599,69 @@ class TestFullPipelineIntegration:
         """Banned domain results are filtered before reaching the synthesizer."""
         from axiom_engine.nodes.retriever import MockSearchBackend, set_search_backend
 
-        set_search_backend(MockSearchBackend([
-            {
-                "url": "https://spam.com/fake",
-                "content": "Spam content that should be filtered out by the retriever node.",
-                "title": "Spam",
-            },
-            {
-                "url": "https://nature.com/battery-review",
-                "content": (
-                    "Solid-state batteries replace liquid electrolytes with solid ceramics. "
-                    "This substitution significantly improves thermal stability."
-                ),
-                "title": "Nature Review",
-            },
-        ]))
+        set_search_backend(
+            MockSearchBackend(
+                [
+                    {
+                        "url": "https://spam.com/fake",
+                        "content": "Spam content that should be filtered out by the retriever node.",
+                        "title": "Spam",
+                    },
+                    {
+                        "url": "https://nature.com/battery-review",
+                        "content": (
+                            "Solid-state batteries replace liquid electrolytes with solid ceramics. "
+                            "This substitution significantly improves thermal stability."
+                        ),
+                        "title": "Nature Review",
+                    },
+                ]
+            )
+        )
 
-        synth_json = json.dumps({
-            "is_answerable": True,
-            "sentences": [
-                {
-                    "sentence_id": "s_01",
-                    "text": "Solid-state batteries use solid ceramics.",
-                    "is_cited": True,
-                    "citations": [
-                        {
-                            "citation_id": "cite_1",
-                            "chunk_id": "doc_1_chunk_A",
-                            "exact_source_quote": (
-                                "Solid-state batteries replace liquid electrolytes with solid ceramics."
-                            ),
-                        }
-                    ],
-                }
-            ],
-        })
-        semantic_json = json.dumps({
-            "tier": 2,
-            "semantic_check": "passed",
-            "failure_reason": None,
-            "reasoning": "Consensus source.",
-        })
+        synth_json = json.dumps(
+            {
+                "is_answerable": True,
+                "sentences": [
+                    {
+                        "sentence_id": "s_01",
+                        "text": "Solid-state batteries use solid ceramics.",
+                        "is_cited": True,
+                        "citations": [
+                            {
+                                "citation_id": "cite_1",
+                                "chunk_id": "doc_1_chunk_A",
+                                "exact_source_quote": (
+                                    "Solid-state batteries replace liquid electrolytes with solid ceramics."
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        semantic_json = json.dumps(
+            {
+                "tier": 2,
+                "semantic_check": "passed",
+                "failure_reason": None,
+                "reasoning": "Consensus source.",
+            }
+        )
         mock_llm.side_effect = _make_model_router([synth_json], [semantic_json])
 
         graph = build_axiom_graph()
         state = _base_state(
-            app_config={"banned_domains": ["spam.com"], "expertise_level": "intermediate"},
+            app_config={
+                "banned_domains": ["spam.com"],
+                "expertise_level": "intermediate",
+            },
         )
         result = graph.invoke(state)
 
         # The spam.com chunk should have been filtered out.
         banned_events = [
-            e for e in result["audit_trail"]
-            if e.get("event_type") == "retriever_banned_domain"
+            e for e in result["audit_trail"] if e.get("event_type") == "retriever_banned_domain"
         ]
         assert len(banned_events) >= 1
 
@@ -622,10 +672,12 @@ class TestFullPipelineIntegration:
 
         set_search_backend(MockSearchBackend([]))
 
-        unanswerable_json = json.dumps({
-            "is_answerable": False,
-            "sentences": [],
-        })
+        unanswerable_json = json.dumps(
+            {
+                "is_answerable": False,
+                "sentences": [],
+            }
+        )
         mock_llm.side_effect = _make_model_router([unanswerable_json], [])
 
         graph = build_axiom_graph()

@@ -16,18 +16,18 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib.metadata
 import json
 import logging
 import os
+import threading
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
+from cachetools import TTLCache
 from dotenv import load_dotenv
-
-load_dotenv()  # loads .env from the project root; no-op if file is absent
-
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -35,9 +35,8 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
-from axiom_engine.config.logging import configure_logging
+from axiom_engine.config.logging import configure_logging, request_id_ctx
 from axiom_engine.graph import build_axiom_graph
-from axiom_engine.nodes.retriever import set_search_backend
 from axiom_engine.models import (
     AuditEvent,
     AxiomRequest,
@@ -47,7 +46,10 @@ from axiom_engine.models import (
     FinalSentence,
     TierBreakdown,
 )
+from axiom_engine.nodes.retriever import set_search_backend
 from axiom_engine.state import make_initial_state
+
+load_dotenv()  # Load .env from project root; no-op if absent.
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -68,9 +70,10 @@ limiter = Limiter(key_func=get_remote_address, default_limits=[_RATE_LIMIT])
 
 
 # ---------------------------------------------------------------------------
-# Runtime metrics
+# Runtime metrics (thread-safe)
 # ---------------------------------------------------------------------------
 
+_metrics_lock = threading.Lock()
 _metrics: dict[str, Any] = {
     "requests_total": 0,
     "requests_success": 0,
@@ -83,12 +86,28 @@ _metrics: dict[str, Any] = {
 }
 
 
+def _inc_metric(key: str, amount: int = 1) -> None:
+    """Thread-safe metric increment."""
+    with _metrics_lock:
+        _metrics[key] += amount
+
+
+def _inc_tier(tier_key: str) -> None:
+    """Thread-safe tier counter increment."""
+    with _metrics_lock:
+        _metrics["tier_counts"][tier_key] += 1
+
+
 # ---------------------------------------------------------------------------
-# Response cache (in-memory, TTL-based)
+# Response cache (bounded, TTL-based)
 # ---------------------------------------------------------------------------
 
 _CACHE_TTL_SECONDS: int = 300  # 5 minutes
-_response_cache: dict[str, tuple[AxiomResponse, float]] = {}
+_CACHE_MAX_SIZE: int = 256  # max cached responses before LRU eviction
+_response_cache: TTLCache[str, AxiomResponse] = TTLCache(
+    maxsize=_CACHE_MAX_SIZE, ttl=_CACHE_TTL_SECONDS
+)
+_cache_lock = threading.Lock()
 
 
 def _cache_key(payload: AxiomRequest) -> str:
@@ -106,16 +125,13 @@ def _cache_key(payload: AxiomRequest) -> str:
 
 
 def _get_cached(key: str) -> AxiomResponse | None:
-    if key in _response_cache:
-        response, ts = _response_cache[key]
-        if time.monotonic() - ts < _CACHE_TTL_SECONDS:
-            return response
-        del _response_cache[key]
-    return None
+    with _cache_lock:
+        return _response_cache.get(key)
 
 
 def _set_cached(key: str, response: AxiomResponse) -> None:
-    _response_cache[key] = (response, time.monotonic())
+    with _cache_lock:
+        _response_cache[key] = response
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +212,7 @@ def determine_status(
 # Graph result → AxiomResponse marshalling
 # ---------------------------------------------------------------------------
 
+
 def marshal_response(
     request_id: str,
     graph_result: dict[str, Any],
@@ -210,9 +227,7 @@ def marshal_response(
 
     # Validate each sentence through the Pydantic model to ensure
     # the response contract is fully honoured.
-    final_sentences: list[FinalSentence] = [
-        FinalSentence.model_validate(s) for s in raw_sentences
-    ]
+    final_sentences: list[FinalSentence] = [FinalSentence.model_validate(s) for s in raw_sentences]
 
     status = determine_status(is_answerable, raw_sentences)
     confidence = compute_confidence_summary(raw_sentences)
@@ -268,6 +283,7 @@ def make_error_response(
 # App factory & lifespan
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Compile the graph once at startup, attach to app state."""
@@ -277,6 +293,7 @@ async def lifespan(app: FastAPI):
     tavily_key = os.environ.get("TAVILY_API_KEY")
     if tavily_key:
         from axiom_engine.search.tavily import TavilySearchBackend
+
         set_search_backend(TavilySearchBackend(api_key=tavily_key))
         logger.info("Search backend: Tavily (live web search enabled).")
     else:
@@ -291,9 +308,11 @@ async def lifespan(app: FastAPI):
     yield
 
 
+_VERSION = importlib.metadata.version("axiom-engine")
+
 app = FastAPI(
     title="Axiom Engine",
-    version="2.3.0",
+    version=_VERSION,
     description="Configuration-driven Agentic RAG with 6-tier verification.",
     lifespan=lifespan,
 )
@@ -306,6 +325,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # ty
 # ---------------------------------------------------------------------------
 # Global exception handler (architecture §7, Category 1)
 # ---------------------------------------------------------------------------
+
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(
@@ -336,6 +356,7 @@ async def unhandled_exception_handler(
 # Health check
 # ---------------------------------------------------------------------------
 
+
 @app.get("/health", summary="Liveness / readiness probe.")
 @limiter.exempt
 async def health() -> dict[str, str]:
@@ -350,10 +371,10 @@ async def metrics() -> dict[str, Any]:
     Designed for Prometheus scraping or ops dashboards.
     """
     total = _metrics["requests_total"]
-    hit_rate = (
-        round(_metrics["requests_cache_hits"] / total, 4) if total > 0 else 0.0
-    )
+    hit_rate = round(_metrics["requests_cache_hits"] / total, 4) if total > 0 else 0.0
     uptime = time.monotonic() - _metrics["started_at"]
+    with _metrics_lock:
+        tier_dist = dict(_metrics["tier_counts"])
     return {
         "uptime_seconds": round(uptime, 1),
         "requests_total": total,
@@ -363,13 +384,14 @@ async def metrics() -> dict[str, Any]:
         "requests_error": _metrics["requests_error"],
         "cache_hits": _metrics["requests_cache_hits"],
         "cache_hit_rate": hit_rate,
-        "tier_distribution": dict(_metrics["tier_counts"]),
+        "tier_distribution": tier_dist,
     }
 
 
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
+
 
 @app.post(
     "/v1/synthesize",
@@ -381,13 +403,14 @@ async def synthesize(payload: AxiomRequest) -> AxiomResponse:
     Accept an AxiomRequest, execute the LangGraph DAG, and return
     a fully validated AxiomResponse with tier breakdown and confidence score.
     """
-    _metrics["requests_total"] += 1
+    request_id_ctx.set(payload.request_id)
+    _inc_metric("requests_total")
 
     # Cache lookup — skip for error/unanswerable; only cache clean results.
     key = _cache_key(payload)
     cached = _get_cached(key)
     if cached is not None:
-        _metrics["requests_cache_hits"] += 1
+        _inc_metric("requests_cache_hits")
         logger.info("Cache hit for request %s", payload.request_id)
         return cached
 
@@ -403,18 +426,18 @@ async def synthesize(payload: AxiomRequest) -> AxiomResponse:
         engine = app.state.engine
         graph_result = await asyncio.to_thread(engine.invoke, initial_state)
     except Exception as exc:
-        _metrics["requests_error"] += 1
+        _inc_metric("requests_error")
         return make_error_response(payload.request_id, exc)
 
     response = marshal_response(payload.request_id, graph_result, payload.include_debug)
 
     # Update metrics.
-    _metrics[f"requests_{response.status}"] += 1
+    _inc_metric(f"requests_{response.status}")
     for sentence in graph_result.get("final_sentences", []):
         tier = sentence.get("verification", {}).get("tier", 3)
-        _metrics["tier_counts"][f"tier_{tier}"] += 1
+        _inc_tier(f"tier_{tier}")
 
-    # Cache successful and partial responses (not errors or unanswerable).
+    # Cache successful and partial responses.
     if response.status in ("success", "partial"):
         _set_cached(key, response)
 

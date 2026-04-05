@@ -33,9 +33,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from functools import partial
 from typing import Any, Literal, cast
-from uuid import uuid4
 
 import litellm
 
@@ -45,9 +44,11 @@ from axiom_engine.models import (
     VerificationResult,
 )
 from axiom_engine.state import GraphState
+from axiom_engine.utils.audit import make_audit_event
 from axiom_engine.utils.llm import build_completion_kwargs
 
 logger = logging.getLogger("axiom_engine.semantic")
+_audit = partial(make_audit_event, "semantic_verifier")
 
 # ---------------------------------------------------------------------------
 # Tier label lookup
@@ -62,7 +63,7 @@ _TIER_LABELS: dict[int, str] = {
     2: "consensus",
     3: "model_assisted",
     4: "misrepresented",
-    5: "hallucinated",   # assigned by Mechanical, never by Semantic
+    5: "hallucinated",  # assigned by Mechanical, never by Semantic
     6: "conflicted",
 }
 
@@ -157,19 +158,6 @@ def _parse_semantic_response(raw: str) -> dict[str, Any]:
     return data
 
 
-def _make_audit_event(
-    event_type: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "event_id": str(uuid4()),
-        "node": "semantic_verifier",
-        "event_type": event_type,
-        "payload": payload,
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-    }
-
-
 def _build_rewrite_request(
     sentence_id: str,
     citation_id: str,
@@ -198,6 +186,7 @@ def _degraded_verification(citation_id: str, chunk_id: str) -> VerificationResul
 # ---------------------------------------------------------------------------
 # Per-citation semantic check
 # ---------------------------------------------------------------------------
+
 
 def _verify_citation(
     claim_text: str,
@@ -248,7 +237,8 @@ def _verify_citation(
         # Category 2 degradation: semantic verifier failure → Tier 3 + warning.
         logger.warning(
             "Semantic verification failed for chunk %s, degrading to Tier 3: %s",
-            chunk_id, exc,
+            chunk_id,
+            exc,
         )
         return (
             VerificationResult(
@@ -269,12 +259,16 @@ def _verify_citation(
         tier=tier,
         tier_label=cast(
             Literal[
-                "authoritative", "consensus", "model_assisted",
-                "misrepresented", "hallucinated", "conflicted",
+                "authoritative",
+                "consensus",
+                "model_assisted",
+                "misrepresented",
+                "hallucinated",
+                "conflicted",
             ],
             _TIER_LABELS[tier],
         ),
-        mechanical_check="passed",   # Semantic only runs after mechanical pass
+        mechanical_check="passed",  # Semantic only runs after mechanical pass
         semantic_check=semantic_check,
         failure_reason=failure_reason,
     )
@@ -294,6 +288,7 @@ def _verify_citation(
 # ---------------------------------------------------------------------------
 # Node
 # ---------------------------------------------------------------------------
+
 
 def semantic_verifier_node(state: GraphState) -> dict[str, Any]:
     """
@@ -324,7 +319,7 @@ def semantic_verifier_node(state: GraphState) -> dict[str, Any]:
     mechanical_results: dict[str, str] = cast(dict[str, str], state.get("mechanical_results") or {})
 
     audit.append(
-        _make_audit_event(
+        _audit(
             "semantic_verifier_start",
             {
                 "semantic_enabled": semantic_enabled,
@@ -367,7 +362,7 @@ def semantic_verifier_node(state: GraphState) -> dict[str, Any]:
                 # the verification_node handles those as Tier 5 rewrite requests.
                 if mechanical_results.get(cit_id) == "failed":
                     audit.append(
-                        _make_audit_event(
+                        _audit(
                             "semantic_skip_mechanical_fail",
                             {"citation_id": cit_id, "chunk_id": chunk_id},
                         )
@@ -377,7 +372,7 @@ def semantic_verifier_node(state: GraphState) -> dict[str, Any]:
                 if not semantic_enabled:
                     vr = _degraded_verification(cit_id, chunk_id)
                     audit.append(
-                        _make_audit_event(
+                        _audit(
                             "semantic_skipped_disabled",
                             {"citation_id": cit_id, "chunk_id": chunk_id, "tier": 3},
                         )
@@ -400,7 +395,7 @@ def semantic_verifier_node(state: GraphState) -> dict[str, Any]:
                             )
                         )
                     audit.append(
-                        _make_audit_event(
+                        _audit(
                             "semantic_citation_result",
                             {
                                 "citation_id": cit_id,
@@ -436,7 +431,7 @@ def semantic_verifier_node(state: GraphState) -> dict[str, Any]:
         final_sentences.append(final_sentence.model_dump())
 
     audit.append(
-        _make_audit_event(
+        _audit(
             "semantic_verifier_complete",
             {
                 "final_sentence_count": len(final_sentences),
@@ -447,7 +442,7 @@ def semantic_verifier_node(state: GraphState) -> dict[str, Any]:
 
     return {
         "final_sentences": final_sentences,
-        "rewrite_requests": rewrite_requests,   # operator.add appends
+        "rewrite_requests": rewrite_requests,  # operator.add appends
         "loop_count": state.get("loop_count", 0) + 1,
         "audit_trail": audit,
     }

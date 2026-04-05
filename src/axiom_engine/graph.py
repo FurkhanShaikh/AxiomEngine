@@ -37,6 +37,7 @@ _DEFAULT_MAX_RETRIEVAL_RETRIES = 1  # Fallback when not set in pipeline_config
 # Conditional edge — the verification loop (LLD §4)
 # ---------------------------------------------------------------------------
 
+
 def route_post_verification(
     state: GraphState,
 ) -> Literal["synthesizer", "re_retriever", "__end__"]:
@@ -69,9 +70,7 @@ def route_post_verification(
         return "synthesizer"
 
     # Rule 4: re-retrieve if rewrites exhausted but retries available
-    max_retries: int = stages_cfg.get(
-        "max_retrieval_retries", _DEFAULT_MAX_RETRIEVAL_RETRIES
-    )
+    max_retries: int = stages_cfg.get("max_retrieval_retries", _DEFAULT_MAX_RETRIEVAL_RETRIES)
     if state.get("retrieval_retry_count", 0) < max_retries:
         return "re_retriever"
 
@@ -82,6 +81,7 @@ def route_post_verification(
 # ---------------------------------------------------------------------------
 # Re-retrieve wrapper — increments retry counter
 # ---------------------------------------------------------------------------
+
 
 def retriever_with_retry(state: GraphState) -> dict:
     """Wrapper that runs retriever_node and increments retrieval_retry_count."""
@@ -96,6 +96,7 @@ def retriever_with_retry(state: GraphState) -> dict:
 # ---------------------------------------------------------------------------
 # Graph compilation
 # ---------------------------------------------------------------------------
+
 
 def build_axiom_graph() -> CompiledStateGraph:
     """
@@ -133,7 +134,3 @@ def build_axiom_graph() -> CompiledStateGraph:
     )
 
     return workflow.compile()
-
-
-# Compiled engine — importable as `from graph import axiom_engine`
-axiom_engine = build_axiom_graph()

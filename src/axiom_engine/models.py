@@ -216,6 +216,4 @@ class AuditEvent(BaseModel):
     node: str = Field(..., description="Name of the emitting LangGraph node.")
     event_type: str
     payload: dict = Field(default_factory=dict)
-    timestamp_utc: str = Field(
-        ..., description="ISO-8601 UTC timestamp at emission time."
-    )
+    timestamp_utc: str = Field(..., description="ISO-8601 UTC timestamp at emission time.")

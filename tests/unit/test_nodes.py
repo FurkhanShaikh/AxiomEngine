@@ -21,7 +21,6 @@ import pytest
 
 from axiom_engine.nodes.semantic import _parse_semantic_response, semantic_verifier_node
 from axiom_engine.nodes.synthesizer import (
-    _build_chunks_block,
     _parse_llm_response,
     synthesizer_node,
 )
@@ -30,6 +29,7 @@ from axiom_engine.state import make_initial_state
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_state(
     user_query: str = "What is a solid-state battery?",
@@ -101,23 +101,25 @@ _SAMPLE_CHUNKS = [
     },
 ]
 
-_VALID_SYNTHESIZER_JSON = json.dumps({
-    "is_answerable": True,
-    "sentences": [
-        {
-            "sentence_id": "s_01",
-            "text": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
-            "is_cited": True,
-            "citations": [
-                {
-                    "citation_id": "cite_1",
-                    "chunk_id": "doc_1_chunk_A",
-                    "exact_source_quote": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
-                }
-            ],
-        }
-    ],
-})
+_VALID_SYNTHESIZER_JSON = json.dumps(
+    {
+        "is_answerable": True,
+        "sentences": [
+            {
+                "sentence_id": "s_01",
+                "text": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
+                "is_cited": True,
+                "citations": [
+                    {
+                        "citation_id": "cite_1",
+                        "chunk_id": "doc_1_chunk_A",
+                        "exact_source_quote": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
+                    }
+                ],
+            }
+        ],
+    }
+)
 
 _UNANSWERABLE_JSON = json.dumps({"is_answerable": False, "sentences": []})
 
@@ -160,7 +162,7 @@ class TestSynthesizerNode:
             loop_count=1,
         )
 
-        result = synthesizer_node(state)
+        synthesizer_node(state)
 
         # Verify the prompt that was actually sent contains the rewrite instruction.
         call_args = mock_completion.call_args
@@ -182,9 +184,7 @@ class TestSynthesizerNode:
         assert "CORRECTION INSTRUCTIONS" not in user_message["content"]
 
     @patch("axiom_engine.nodes.synthesizer.litellm.completion")
-    def test_ranked_chunks_preferred_over_indexed_chunks(
-        self, mock_completion: MagicMock
-    ) -> None:
+    def test_ranked_chunks_preferred_over_indexed_chunks(self, mock_completion: MagicMock) -> None:
         mock_completion.return_value = _mock_litellm_response(_VALID_SYNTHESIZER_JSON)
         ranked = [{"chunk_id": "doc_3_chunk_X", "text": "Ranked chunk text."}]
         state = _make_state(indexed_chunks=_SAMPLE_CHUNKS, ranked_chunks=ranked)
@@ -232,9 +232,7 @@ class TestSynthesizerNode:
     @patch("axiom_engine.nodes.synthesizer.litellm.completion")
     def test_uses_model_from_state(self, mock_completion: MagicMock) -> None:
         mock_completion.return_value = _mock_litellm_response(_VALID_SYNTHESIZER_JSON)
-        state = _make_state(
-            indexed_chunks=_SAMPLE_CHUNKS, synthesizer_model="gpt-4o"
-        )
+        state = _make_state(indexed_chunks=_SAMPLE_CHUNKS, synthesizer_model="gpt-4o")
 
         synthesizer_node(state)
 
@@ -321,12 +319,14 @@ class TestSemanticVerifierTierAssignment:
         failure_reason: str | None = None,
         mechanical_results: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        llm_json = json.dumps({
-            "tier": tier,
-            "semantic_check": semantic_check,
-            "failure_reason": failure_reason,
-            "reasoning": "Test reasoning.",
-        })
+        llm_json = json.dumps(
+            {
+                "tier": tier,
+                "semantic_check": semantic_check,
+                "failure_reason": failure_reason,
+                "reasoning": "Test reasoning.",
+            }
+        )
         draft = [
             {
                 "sentence_id": "s_01",
@@ -389,12 +389,14 @@ class TestSemanticVerifierTierAssignment:
 
     def test_tier_5_rejected_by_parser(self) -> None:
         """Semantic verifier must never assign Tier 5 — that belongs to Mechanical."""
-        llm_json = json.dumps({
-            "tier": 5,
-            "semantic_check": "failed",
-            "failure_reason": "Quote not found.",
-            "reasoning": "Should not happen.",
-        })
+        llm_json = json.dumps(
+            {
+                "tier": 5,
+                "semantic_check": "failed",
+                "failure_reason": "Quote not found.",
+                "reasoning": "Should not happen.",
+            }
+        )
         draft = [
             {
                 "sentence_id": "s_01",
@@ -431,7 +433,14 @@ class TestSemanticVerifierStateUpdates:
     @patch("axiom_engine.nodes.semantic.litellm.completion")
     def test_loop_count_incremented(self, mock_comp: MagicMock) -> None:
         mock_comp.return_value = _mock_litellm_response(
-            json.dumps({"tier": 1, "semantic_check": "passed", "failure_reason": None, "reasoning": "ok"})
+            json.dumps(
+                {
+                    "tier": 1,
+                    "semantic_check": "passed",
+                    "failure_reason": None,
+                    "reasoning": "ok",
+                }
+            )
         )
         draft = [
             {
@@ -464,9 +473,7 @@ class TestSemanticVerifierStateUpdates:
         mock_comp.assert_not_called()
 
     @patch("axiom_engine.nodes.semantic.litellm.completion")
-    def test_mechanical_failed_citation_skipped_by_semantic(
-        self, mock_comp: MagicMock
-    ) -> None:
+    def test_mechanical_failed_citation_skipped_by_semantic(self, mock_comp: MagicMock) -> None:
         """Citations that failed mechanical check are skipped by semantic."""
         draft = [
             {
@@ -487,13 +494,20 @@ class TestSemanticVerifierStateUpdates:
             draft_sentences=draft,
             mechanical_results={"cite_1": "failed"},
         )
-        result = semantic_verifier_node(state)
+        semantic_verifier_node(state)
         mock_comp.assert_not_called()
 
     @patch("axiom_engine.nodes.semantic.litellm.completion")
     def test_final_sentences_count_matches_draft(self, mock_comp: MagicMock) -> None:
         mock_comp.return_value = _mock_litellm_response(
-            json.dumps({"tier": 2, "semantic_check": "passed", "failure_reason": None, "reasoning": "ok"})
+            json.dumps(
+                {
+                    "tier": 2,
+                    "semantic_check": "passed",
+                    "failure_reason": None,
+                    "reasoning": "ok",
+                }
+            )
         )
         draft = [
             {
@@ -513,7 +527,11 @@ class TestSemanticVerifierStateUpdates:
         state = _make_state(
             indexed_chunks=_SAMPLE_CHUNKS,
             draft_sentences=draft,
-            mechanical_results={"cite_1": "passed", "cite_2": "passed", "cite_3": "passed"},
+            mechanical_results={
+                "cite_1": "passed",
+                "cite_2": "passed",
+                "cite_3": "passed",
+            },
         )
         result = semantic_verifier_node(state)
         assert len(result["final_sentences"]) == 3
@@ -521,7 +539,14 @@ class TestSemanticVerifierStateUpdates:
     @patch("axiom_engine.nodes.semantic.litellm.completion")
     def test_audit_trail_populated(self, mock_comp: MagicMock) -> None:
         mock_comp.return_value = _mock_litellm_response(
-            json.dumps({"tier": 1, "semantic_check": "passed", "failure_reason": None, "reasoning": "ok"})
+            json.dumps(
+                {
+                    "tier": 1,
+                    "semantic_check": "passed",
+                    "failure_reason": None,
+                    "reasoning": "ok",
+                }
+            )
         )
         draft = [
             {
@@ -614,17 +639,38 @@ class TestSemanticVerifierDegradation:
     def test_parse_semantic_response_rejects_tier_5(self) -> None:
         with pytest.raises(ValueError, match="invalid tier"):
             _parse_semantic_response(
-                json.dumps({"tier": 5, "semantic_check": "failed", "failure_reason": None, "reasoning": "x"})
+                json.dumps(
+                    {
+                        "tier": 5,
+                        "semantic_check": "failed",
+                        "failure_reason": None,
+                        "reasoning": "x",
+                    }
+                )
             )
 
     def test_parse_semantic_response_rejects_tier_7(self) -> None:
         with pytest.raises(ValueError, match="invalid tier"):
             _parse_semantic_response(
-                json.dumps({"tier": 7, "semantic_check": "passed", "failure_reason": None, "reasoning": "x"})
+                json.dumps(
+                    {
+                        "tier": 7,
+                        "semantic_check": "passed",
+                        "failure_reason": None,
+                        "reasoning": "x",
+                    }
+                )
             )
 
     def test_parse_semantic_response_rejects_invalid_semantic_check(self) -> None:
         with pytest.raises(ValueError, match="semantic_check"):
             _parse_semantic_response(
-                json.dumps({"tier": 1, "semantic_check": "maybe", "failure_reason": None, "reasoning": "x"})
+                json.dumps(
+                    {
+                        "tier": 1,
+                        "semantic_check": "maybe",
+                        "failure_reason": None,
+                        "reasoning": "x",
+                    }
+                )
             )

@@ -19,29 +19,19 @@ mechanical_results, audit_trail
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import logging
+from functools import partial
 from typing import Any, cast
-from uuid import uuid4
 
 from axiom_engine.nodes.semantic import semantic_verifier_node
 from axiom_engine.state import GraphState
+from axiom_engine.utils.audit import make_audit_event
 from axiom_engine.verifiers.mechanical import MechanicalVerifier
 
 # Module-level singleton — stateless, safe to reuse.
 _mechanical = MechanicalVerifier()
-
-
-def _make_audit_event(
-    event_type: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "event_id": str(uuid4()),
-        "node": "verifier",
-        "event_type": event_type,
-        "payload": payload,
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-    }
+_audit = partial(make_audit_event, "verifier")
+logger = logging.getLogger("axiom_engine.verifier")
 
 
 def _build_tier5_rewrite_request(
@@ -72,7 +62,7 @@ def verification_node(state: GraphState) -> dict[str, Any]:
     chunk_lookup: dict[str, dict] = {c["chunk_id"]: c for c in indexed_chunks}
 
     audit.append(
-        _make_audit_event(
+        _audit(
             "verification_start",
             {
                 "sentence_count": len(draft_sentences),
@@ -102,12 +92,14 @@ def verification_node(state: GraphState) -> dict[str, Any]:
                 mechanical_results[cit_id] = "failed"
                 mechanical_rewrite_requests.append(
                     _build_tier5_rewrite_request(
-                        sentence_id, cit_id, chunk_id,
+                        sentence_id,
+                        cit_id,
+                        chunk_id,
                         f"Chunk {chunk_id} not found in indexed_chunks.",
                     )
                 )
                 audit.append(
-                    _make_audit_event(
+                    _audit(
                         "mechanical_chunk_not_found",
                         {"citation_id": cit_id, "chunk_id": chunk_id},
                     )
@@ -123,7 +115,7 @@ def verification_node(state: GraphState) -> dict[str, Any]:
 
             mechanical_results[cit_id] = result.status
             audit.append(
-                _make_audit_event(
+                _audit(
                     "mechanical_result",
                     result.audit_proof,
                 )
@@ -132,7 +124,9 @@ def verification_node(state: GraphState) -> dict[str, Any]:
             if result.status == "failed":
                 mechanical_rewrite_requests.append(
                     _build_tier5_rewrite_request(
-                        sentence_id, cit_id, chunk_id,
+                        sentence_id,
+                        cit_id,
+                        chunk_id,
                         result.audit_proof.get(
                             "failure_reason",
                             "Normalized quote not found in chunk.",
@@ -141,7 +135,7 @@ def verification_node(state: GraphState) -> dict[str, Any]:
                 )
 
     audit.append(
-        _make_audit_event(
+        _audit(
             "mechanical_phase_complete",
             {
                 "total_citations": len(mechanical_results),
@@ -164,8 +158,8 @@ def verification_node(state: GraphState) -> dict[str, Any]:
     # Merge results
     # ------------------------------------------------------------------
     # Combine mechanical rewrite requests (Tier 5) with semantic ones (Tier 4).
-    all_rewrite_requests: list[str] = (
-        mechanical_rewrite_requests + semantic_result.get("rewrite_requests", [])
+    all_rewrite_requests: list[str] = mechanical_rewrite_requests + semantic_result.get(
+        "rewrite_requests", []
     )
     pending_count = len(all_rewrite_requests)
 

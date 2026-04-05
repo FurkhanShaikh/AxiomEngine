@@ -31,31 +31,31 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 _UNICODE_SUBSTITUTIONS: dict[str, str] = {
     # Smart / curly quotes → straight quotes
-    "\u2018": "'",   # LEFT SINGLE QUOTATION MARK
-    "\u2019": "'",   # RIGHT SINGLE QUOTATION MARK
-    "\u201a": "'",   # SINGLE LOW-9 QUOTATION MARK
-    "\u201b": "'",   # SINGLE HIGH-REVERSED-9 QUOTATION MARK
-    "\u201c": '"',   # LEFT DOUBLE QUOTATION MARK
-    "\u201d": '"',   # RIGHT DOUBLE QUOTATION MARK
-    "\u201e": '"',   # DOUBLE LOW-9 QUOTATION MARK
-    "\u201f": '"',   # DOUBLE HIGH-REVERSED-9 QUOTATION MARK
+    "\u2018": "'",  # LEFT SINGLE QUOTATION MARK
+    "\u2019": "'",  # RIGHT SINGLE QUOTATION MARK
+    "\u201a": "'",  # SINGLE LOW-9 QUOTATION MARK
+    "\u201b": "'",  # SINGLE HIGH-REVERSED-9 QUOTATION MARK
+    "\u201c": '"',  # LEFT DOUBLE QUOTATION MARK
+    "\u201d": '"',  # RIGHT DOUBLE QUOTATION MARK
+    "\u201e": '"',  # DOUBLE LOW-9 QUOTATION MARK
+    "\u201f": '"',  # DOUBLE HIGH-REVERSED-9 QUOTATION MARK
     # Dashes → hyphen
-    "\u2013": "-",   # EN DASH
-    "\u2014": "-",   # EM DASH
-    "\u2015": "-",   # HORIZONTAL BAR
+    "\u2013": "-",  # EN DASH
+    "\u2014": "-",  # EM DASH
+    "\u2015": "-",  # HORIZONTAL BAR
     # Non-standard spaces → regular space
-    "\u00a0": " ",   # NON-BREAKING SPACE
-    "\u202f": " ",   # NARROW NO-BREAK SPACE
-    "\u2009": " ",   # THIN SPACE
-    "\u2008": " ",   # PUNCTUATION SPACE
-    "\u2007": " ",   # FIGURE SPACE
-    "\u2006": " ",   # SIX-PER-EM SPACE
-    "\u2005": " ",   # FOUR-PER-EM SPACE
-    "\u2004": " ",   # THREE-PER-EM SPACE
-    "\u2003": " ",   # EM SPACE
-    "\u2002": " ",   # EN SPACE
-    "\u200b": "",    # ZERO WIDTH SPACE (remove entirely)
-    "\u00ad": "",    # SOFT HYPHEN (remove entirely)
+    "\u00a0": " ",  # NON-BREAKING SPACE
+    "\u202f": " ",  # NARROW NO-BREAK SPACE
+    "\u2009": " ",  # THIN SPACE
+    "\u2008": " ",  # PUNCTUATION SPACE
+    "\u2007": " ",  # FIGURE SPACE
+    "\u2006": " ",  # SIX-PER-EM SPACE
+    "\u2005": " ",  # FOUR-PER-EM SPACE
+    "\u2004": " ",  # THREE-PER-EM SPACE
+    "\u2003": " ",  # EM SPACE
+    "\u2002": " ",  # EN SPACE
+    "\u200b": "",  # ZERO WIDTH SPACE (remove entirely)
+    "\u00ad": "",  # SOFT HYPHEN (remove entirely)
     # Ellipsis
     "\u2026": "...",  # HORIZONTAL ELLIPSIS
 }
@@ -183,11 +183,7 @@ class MechanicalVerifier:
 
         # Step 2: NFKD decomposition — resolves ligatures, fullwidth chars, etc.
         #         Encode to ASCII (ignore) to drop any surviving non-ASCII.
-        text = (
-            unicodedata.normalize("NFKD", text)
-            .encode("ascii", errors="ignore")
-            .decode("ascii")
-        )
+        text = unicodedata.normalize("NFKD", text).encode("ascii", errors="ignore").decode("ascii")
 
         # Step 3: Lowercase.
         text = text.lower()

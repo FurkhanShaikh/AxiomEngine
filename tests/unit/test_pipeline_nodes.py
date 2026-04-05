@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from axiom_engine.nodes.ranker import (
     _tokenize,
     compute_ranking_score,
@@ -32,7 +30,6 @@ from axiom_engine.nodes.retriever import (
     strip_html,
 )
 from axiom_engine.nodes.scorer import (
-    _MIN_QUALITY_THRESHOLD,
     compute_combined_score,
     score_chunk_quality,
     score_source_quality,
@@ -43,6 +40,7 @@ from axiom_engine.state import make_initial_state
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _base_state(**overrides: Any) -> dict[str, Any]:
     """Create a minimal valid GraphState for testing."""
@@ -158,13 +156,15 @@ class TestDomainFiltering:
 
 class TestRetrieverNode:
     def test_returns_indexed_chunks(self) -> None:
-        backend = MockSearchBackend([
-            {
-                "url": "https://example.com/article",
-                "content": "First long paragraph with enough content to pass the filter.\n\nSecond paragraph also long enough to pass the minimum length filter.",
-                "title": "Test",
-            }
-        ])
+        backend = MockSearchBackend(
+            [
+                {
+                    "url": "https://example.com/article",
+                    "content": "First long paragraph with enough content to pass the filter.\n\nSecond paragraph also long enough to pass the minimum length filter.",
+                    "title": "Test",
+                }
+            ]
+        )
         set_search_backend(backend)
         state = _base_state()
         result = retriever_node(state)
@@ -175,13 +175,15 @@ class TestRetrieverNode:
         assert len(result["indexed_chunks"]) >= 1
 
     def test_chunk_ids_follow_pattern(self) -> None:
-        backend = MockSearchBackend([
-            {
-                "url": "https://example.com/a",
-                "content": "Long paragraph one with enough characters to pass.\n\nLong paragraph two with enough characters to pass.",
-                "title": "A",
-            }
-        ])
+        backend = MockSearchBackend(
+            [
+                {
+                    "url": "https://example.com/a",
+                    "content": "Long paragraph one with enough characters to pass.\n\nLong paragraph two with enough characters to pass.",
+                    "title": "A",
+                }
+            ]
+        )
         set_search_backend(backend)
         state = _base_state()
         result = retriever_node(state)
@@ -191,10 +193,20 @@ class TestRetrieverNode:
             assert "_chunk_" in chunk["chunk_id"]
 
     def test_banned_domains_filtered(self) -> None:
-        backend = MockSearchBackend([
-            {"url": "https://banned.com/x", "content": "Content " * 20, "title": "Bad"},
-            {"url": "https://good.com/x", "content": "Content " * 20, "title": "Good"},
-        ])
+        backend = MockSearchBackend(
+            [
+                {
+                    "url": "https://banned.com/x",
+                    "content": "Content " * 20,
+                    "title": "Bad",
+                },
+                {
+                    "url": "https://good.com/x",
+                    "content": "Content " * 20,
+                    "title": "Good",
+                },
+            ]
+        )
         set_search_backend(backend)
         state = _base_state(app_config={"banned_domains": ["banned.com"]})
         result = retriever_node(state)
@@ -209,13 +221,15 @@ class TestRetrieverNode:
         assert result["indexed_chunks"] == []
 
     def test_html_stripped_from_content(self) -> None:
-        backend = MockSearchBackend([
-            {
-                "url": "https://example.com/a",
-                "content": "<p>This is a long paragraph with enough characters to pass the minimum length filter.</p>",
-                "title": "A",
-            }
-        ])
+        backend = MockSearchBackend(
+            [
+                {
+                    "url": "https://example.com/a",
+                    "content": "<p>This is a long paragraph with enough characters to pass the minimum length filter.</p>",
+                    "title": "A",
+                }
+            ]
+        )
         set_search_backend(backend)
         state = _base_state()
         result = retriever_node(state)
@@ -371,7 +385,7 @@ class TestRelevanceScore:
     def test_partial_overlap(self) -> None:
         score = compute_relevance_score(
             "solid state battery safety",
-            "Solid-state batteries improve safety through ceramic electrolytes."
+            "Solid-state batteries improve safety through ceramic electrolytes.",
         )
         assert 0.0 < score < 1.0
 
@@ -381,12 +395,14 @@ class TestRelevanceScore:
         low = compute_relevance_score(
             "battery technology ceramic",
             "battery is a common device",
-            idf_map=idf, avg_doc_len=5.0,
+            idf_map=idf,
+            avg_doc_len=5.0,
         )
         high = compute_relevance_score(
             "battery technology ceramic",
             "battery technology uses ceramic electrolytes",
-            idf_map=idf, avg_doc_len=5.0,
+            idf_map=idf,
+            avg_doc_len=5.0,
         )
         assert high > low
 
@@ -414,10 +430,17 @@ class TestRankingScore:
 class TestRankerNode:
     def test_ranks_by_relevance(self) -> None:
         chunks = [
-            {**_make_chunk(doc=1, text="Unrelated topic about cooking recipes."),
-             "quality_score": 0.5},
-            {**_make_chunk(doc=2, text="Solid-state batteries use solid ceramics for electrolytes."),
-             "quality_score": 0.5},
+            {
+                **_make_chunk(doc=1, text="Unrelated topic about cooking recipes."),
+                "quality_score": 0.5,
+            },
+            {
+                **_make_chunk(
+                    doc=2,
+                    text="Solid-state batteries use solid ceramics for electrolytes.",
+                ),
+                "quality_score": 0.5,
+            },
         ]
         state = _base_state(
             user_query="solid-state batteries",
@@ -432,8 +455,10 @@ class TestRankerNode:
 
     def test_trims_to_max_ranked(self) -> None:
         chunks = [
-            {**_make_chunk(doc=i, text=f"Chunk {i} about batteries and energy storage."),
-             "quality_score": 0.5}
+            {
+                **_make_chunk(doc=i, text=f"Chunk {i} about batteries and energy storage."),
+                "quality_score": 0.5,
+            }
             for i in range(1, 6)
         ]
         state = _base_state(
@@ -471,8 +496,10 @@ class TestRankerNode:
 
     def test_default_max_ranked_is_10(self) -> None:
         chunks = [
-            {**_make_chunk(doc=i, text=f"Chunk {i} about batteries and solid state technology."),
-             "quality_score": 0.5}
+            {
+                **_make_chunk(doc=i, text=f"Chunk {i} about batteries and solid state technology."),
+                "quality_score": 0.5,
+            }
             for i in range(1, 15)
         ]
         state = _base_state(scored_chunks=chunks)
@@ -488,13 +515,15 @@ class TestRankerNode:
 class TestRetrieverDeduplication:
     def test_deduplicates_by_url(self) -> None:
         """Same URL from multiple queries should only be indexed once."""
-        backend = MockSearchBackend([
-            {
-                "url": "https://example.com/article",
-                "content": "Long paragraph with enough content to pass the minimum length filter easily.",
-                "title": "Test",
-            },
-        ])
+        backend = MockSearchBackend(
+            [
+                {
+                    "url": "https://example.com/article",
+                    "content": "Long paragraph with enough content to pass the minimum length filter easily.",
+                    "title": "Test",
+                },
+            ]
+        )
         set_search_backend(backend)
         state = _base_state()
         result = retriever_node(state)
@@ -505,11 +534,23 @@ class TestRetrieverDeduplication:
 
     def test_deduplicates_by_content_hash(self) -> None:
         """Identical paragraph text from different URLs should be deduplicated."""
-        shared_text = "Identical paragraph content that appears on multiple sites and is long enough."
-        backend = MockSearchBackend([
-            {"url": "https://site-a.com/page", "content": shared_text, "title": "A"},
-            {"url": "https://site-b.com/page", "content": shared_text, "title": "B"},
-        ])
+        shared_text = (
+            "Identical paragraph content that appears on multiple sites and is long enough."
+        )
+        backend = MockSearchBackend(
+            [
+                {
+                    "url": "https://site-a.com/page",
+                    "content": shared_text,
+                    "title": "A",
+                },
+                {
+                    "url": "https://site-b.com/page",
+                    "content": shared_text,
+                    "title": "B",
+                },
+            ]
+        )
         set_search_backend(backend)
         state = _base_state()
         result = retriever_node(state)
@@ -518,21 +559,22 @@ class TestRetrieverDeduplication:
         assert texts.count(shared_text) == 1
 
     def test_audit_reports_duplicate_counts(self) -> None:
-        backend = MockSearchBackend([
-            {
-                "url": "https://example.com/same",
-                "content": "Long paragraph with enough content to pass the filter easily for testing.",
-                "title": "Test",
-            },
-        ])
+        backend = MockSearchBackend(
+            [
+                {
+                    "url": "https://example.com/same",
+                    "content": "Long paragraph with enough content to pass the filter easily for testing.",
+                    "title": "Test",
+                },
+            ]
+        )
         set_search_backend(backend)
         state = _base_state()
         result = retriever_node(state)
 
-        complete_event = [
-            e for e in result["audit_trail"]
-            if e["event_type"] == "retriever_complete"
-        ][0]
+        complete_event = next(
+            e for e in result["audit_trail"] if e["event_type"] == "retriever_complete"
+        )
         assert "duplicate_urls_skipped" in complete_event["payload"]
         assert "duplicate_chunks_skipped" in complete_event["payload"]
 

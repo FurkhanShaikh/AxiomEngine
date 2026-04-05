@@ -16,19 +16,24 @@ Responsibilities:
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import string
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from functools import partial
 from typing import Any, Protocol
 from urllib.parse import urlparse
-from uuid import uuid4
 
 from axiom_engine.state import GraphState
+from axiom_engine.utils.audit import make_audit_event
+
+_audit = partial(make_audit_event, "retriever")
+logger = logging.getLogger("axiom_engine.retriever")
 
 # ---------------------------------------------------------------------------
 # Chunk ID generation — sequential alphanumeric labels (A, B, C, ..., Z, AA, AB, ...)
 # ---------------------------------------------------------------------------
+
 
 def _chunk_label(index: int) -> str:
     """Convert a 0-based index into an alphanumeric label: 0→A, 25→Z, 26→AA."""
@@ -70,16 +75,13 @@ def chunk_into_paragraphs(text: str) -> list[str]:
     Filters out chunks shorter than _MIN_CHUNK_LENGTH.
     """
     raw_paragraphs = re.split(r"\n\s*\n", text)
-    return [
-        p.strip()
-        for p in raw_paragraphs
-        if len(p.strip()) >= _MIN_CHUNK_LENGTH
-    ]
+    return [p.strip() for p in raw_paragraphs if len(p.strip()) >= _MIN_CHUNK_LENGTH]
 
 
 # ---------------------------------------------------------------------------
 # Search backend protocol
 # ---------------------------------------------------------------------------
+
 
 class SearchBackend(Protocol):
     """Interface for pluggable search providers (Tavily, Exa, mock)."""
@@ -112,6 +114,7 @@ class MockSearchBackend:
 # Query expansion
 # ---------------------------------------------------------------------------
 
+
 def generate_search_queries(user_query: str) -> list[str]:
     """
     Generate search queries from the user query.
@@ -135,6 +138,7 @@ def generate_search_queries(user_query: str) -> list[str]:
 # Domain filtering
 # ---------------------------------------------------------------------------
 
+
 def extract_domain(url: str) -> str:
     """Extract the domain from a URL, stripping www. prefix."""
     try:
@@ -150,36 +154,17 @@ def extract_domain(url: str) -> str:
 def is_banned(url: str, banned_domains: list[str]) -> bool:
     """Check if a URL's domain is in the banned list."""
     domain = extract_domain(url)
-    return any(
-        domain == bd.lower() or domain.endswith("." + bd.lower())
-        for bd in banned_domains
-    )
+    return any(domain == bd.lower() or domain.endswith("." + bd.lower()) for bd in banned_domains)
 
 
 # ---------------------------------------------------------------------------
 # Content hashing for deduplication
 # ---------------------------------------------------------------------------
 
+
 def _content_hash(text: str) -> str:
     """Return a short SHA-256 hex digest for deduplication."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-
-# ---------------------------------------------------------------------------
-# Audit helper
-# ---------------------------------------------------------------------------
-
-def _make_audit_event(
-    event_type: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "event_id": str(uuid4()),
-        "node": "retriever",
-        "event_type": event_type,
-        "payload": payload,
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +214,7 @@ def retriever_node(state: GraphState) -> dict[str, Any]:
     queries = generate_search_queries(user_query)
 
     audit.append(
-        _make_audit_event(
+        _audit(
             "retriever_start",
             {"query_count": len(queries), "banned_domains": banned},
         )
@@ -253,7 +238,7 @@ def retriever_node(state: GraphState) -> dict[str, Any]:
     for query, results, exc in search_outcomes:
         if exc is not None:
             audit.append(
-                _make_audit_event(
+                _audit(
                     "retriever_search_error",
                     {"query": query, "error": str(exc)},
                 )
@@ -268,7 +253,7 @@ def retriever_node(state: GraphState) -> dict[str, Any]:
             if is_banned(url, banned):
                 total_banned += 1
                 audit.append(
-                    _make_audit_event(
+                    _audit(
                         "retriever_banned_domain",
                         {"url": url, "domain": extract_domain(url)},
                     )
@@ -300,20 +285,22 @@ def retriever_node(state: GraphState) -> dict[str, Any]:
                 seen_chunk_hashes.add(h)
 
                 chunk_id = f"doc_{doc_counter}_chunk_{_chunk_label(chunk_idx)}"
-                indexed_chunks.append({
-                    "chunk_id": chunk_id,
-                    "text": paragraph,
-                    "source_url": url,
-                    "domain": extract_domain(url),
-                    "title": title,
-                    "doc_index": doc_counter,
-                    "chunk_index": chunk_idx,
-                })
+                indexed_chunks.append(
+                    {
+                        "chunk_id": chunk_id,
+                        "text": paragraph,
+                        "source_url": url,
+                        "domain": extract_domain(url),
+                        "title": title,
+                        "doc_index": doc_counter,
+                        "chunk_index": chunk_idx,
+                    }
+                )
 
             doc_counter += 1
 
     audit.append(
-        _make_audit_event(
+        _audit(
             "retriever_complete",
             {
                 "total_search_results": total_results,

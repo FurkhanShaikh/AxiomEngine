@@ -16,12 +16,16 @@ Both scorers are deterministic — no LLM calls required.
 
 from __future__ import annotations
 
+import logging
 import re
-from datetime import datetime, timezone
+from functools import partial
 from typing import Any
-from uuid import uuid4
 
 from axiom_engine.state import GraphState
+from axiom_engine.utils.audit import make_audit_event
+
+_audit = partial(make_audit_event, "scorer")
+logger = logging.getLogger("axiom_engine.scorer")
 
 # ---------------------------------------------------------------------------
 # Source quality — built-in defaults (overridable via app_config)
@@ -29,18 +33,31 @@ from axiom_engine.state import GraphState
 
 _DEFAULT_AUTHORITATIVE_DOMAINS: set[str] = {
     # Academic / government
-    "arxiv.org", "scholar.google.com", "pubmed.ncbi.nlm.nih.gov",
-    "nature.com", "science.org", "ieee.org", "acm.org",
-    "nih.gov", "cdc.gov", "who.int", "europa.eu",
+    "arxiv.org",
+    "scholar.google.com",
+    "pubmed.ncbi.nlm.nih.gov",
+    "nature.com",
+    "science.org",
+    "ieee.org",
+    "acm.org",
+    "nih.gov",
+    "cdc.gov",
+    "who.int",
+    "europa.eu",
     # Reference
-    "en.wikipedia.org", "britannica.com",
+    "en.wikipedia.org",
+    "britannica.com",
     # Major tech docs
-    "docs.python.org", "developer.mozilla.org",
+    "docs.python.org",
+    "developer.mozilla.org",
 }
 
 _DEFAULT_LOW_QUALITY_DOMAINS: set[str] = {
-    "reddit.com", "quora.com", "answers.yahoo.com",
-    "medium.com", "blogspot.com",
+    "reddit.com",
+    "quora.com",
+    "answers.yahoo.com",
+    "medium.com",
+    "blogspot.com",
 }
 
 _DEFAULT_SOURCE_SCORE = 0.5
@@ -100,10 +117,10 @@ def score_source_quality(
 
 # Regex patterns that signal information-rich content.
 _DATA_MARKERS = re.compile(
-    r"\d+\.?\d*\s*%"          # Percentages
-    r"|\d{4}"                 # Years / large numbers
+    r"\d+\.?\d*\s*%"  # Percentages
+    r"|\d{4}"  # Years / large numbers
     r"|(?:fig(?:ure)?|table)\s*\d"  # Figure/table references
-    r"|https?://",            # Embedded URLs (citations within text)
+    r"|https?://",  # Embedded URLs (citations within text)
     re.IGNORECASE,
 )
 
@@ -141,31 +158,13 @@ _CHUNK_WEIGHT = 0.6
 
 def compute_combined_score(source_score: float, chunk_score: float) -> float:
     """Weighted combination of source and chunk quality scores."""
-    return round(
-        _SOURCE_WEIGHT * source_score + _CHUNK_WEIGHT * chunk_score, 4
-    )
-
-
-# ---------------------------------------------------------------------------
-# Audit helper
-# ---------------------------------------------------------------------------
-
-def _make_audit_event(
-    event_type: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "event_id": str(uuid4()),
-        "node": "scorer",
-        "event_type": event_type,
-        "payload": payload,
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-    }
+    return round(_SOURCE_WEIGHT * source_score + _CHUNK_WEIGHT * chunk_score, 4)
 
 
 # ---------------------------------------------------------------------------
 # Node
 # ---------------------------------------------------------------------------
+
 
 def scorer_node(state: GraphState) -> dict[str, Any]:
     """
@@ -186,7 +185,7 @@ def scorer_node(state: GraphState) -> dict[str, Any]:
     authoritative, low_quality = _build_domain_sets(app_cfg)
 
     audit.append(
-        _make_audit_event(
+        _audit(
             "scorer_start",
             {"input_chunk_count": len(indexed_chunks)},
         )
@@ -219,7 +218,7 @@ def scorer_node(state: GraphState) -> dict[str, Any]:
     scored.sort(key=lambda c: c["quality_score"], reverse=True)
 
     audit.append(
-        _make_audit_event(
+        _audit(
             "scorer_complete",
             {
                 "input_chunks": len(indexed_chunks),

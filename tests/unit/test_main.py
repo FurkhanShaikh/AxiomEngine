@@ -28,7 +28,7 @@ from axiom_engine.main import (
     make_error_response,
     marshal_response,
 )
-from axiom_engine.models import AxiomResponse, ConfidenceSummary, TierBreakdown
+from axiom_engine.models import AxiomResponse
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -286,31 +286,35 @@ class TestMarshalResponse:
 class TestEndpoint:
     @patch("litellm.completion")
     def test_full_pipeline_success(self, mock_llm: MagicMock, client: TestClient) -> None:
-        synth_json = json.dumps({
-            "is_answerable": True,
-            "sentences": [
-                {
-                    "sentence_id": "s_01",
-                    "text": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
-                    "is_cited": True,
-                    "citations": [
-                        {
-                            "citation_id": "cite_1",
-                            "chunk_id": "doc_1_chunk_A",
-                            "exact_source_quote": (
-                                "Solid-state batteries replace liquid electrolytes with solid ceramics."
-                            ),
-                        }
-                    ],
-                }
-            ],
-        })
-        semantic_json = json.dumps({
-            "tier": 1,
-            "semantic_check": "passed",
-            "failure_reason": None,
-            "reasoning": "Faithfully represents the source.",
-        })
+        synth_json = json.dumps(
+            {
+                "is_answerable": True,
+                "sentences": [
+                    {
+                        "sentence_id": "s_01",
+                        "text": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
+                        "is_cited": True,
+                        "citations": [
+                            {
+                                "citation_id": "cite_1",
+                                "chunk_id": "doc_1_chunk_A",
+                                "exact_source_quote": (
+                                    "Solid-state batteries replace liquid electrolytes with solid ceramics."
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        semantic_json = json.dumps(
+            {
+                "tier": 1,
+                "semantic_check": "passed",
+                "failure_reason": None,
+                "reasoning": "Faithfully represents the source.",
+            }
+        )
         mock_llm.side_effect = _make_model_router([synth_json], [semantic_json])
 
         # Inject chunks directly into initial_state via monkeypatching.
@@ -335,10 +339,12 @@ class TestEndpoint:
 
     @patch("litellm.completion")
     def test_unanswerable_pipeline(self, mock_llm: MagicMock, client: TestClient) -> None:
-        unanswerable_json = json.dumps({
-            "is_answerable": False,
-            "sentences": [],
-        })
+        unanswerable_json = json.dumps(
+            {
+                "is_answerable": False,
+                "sentences": [],
+            }
+        )
         mock_llm.side_effect = _make_model_router([unanswerable_json], [])
 
         with patch("axiom_engine.main.make_initial_state") as mock_make:
@@ -440,7 +446,9 @@ class TestValidationErrors:
         assert resp.status_code == 422
 
     def test_empty_body_returns_422(self, client: TestClient) -> None:
-        resp = client.post("/v1/synthesize", content=b"", headers={"content-type": "application/json"})
+        resp = client.post(
+            "/v1/synthesize", content=b"", headers={"content-type": "application/json"}
+        )
         assert resp.status_code == 422
 
     def test_valid_minimal_payload_accepted(self, client: TestClient) -> None:

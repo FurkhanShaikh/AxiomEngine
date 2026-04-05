@@ -17,7 +17,6 @@ from __future__ import annotations
 import pytest
 
 from axiom_engine.verifiers.mechanical import (
-    MechanicalVerificationResult,
     MechanicalVerifier,
 )
 
@@ -55,7 +54,7 @@ class TestNormalizeText:
 
     def test_smart_quotes_left_double(self) -> None:
         # U+201C / U+201D → converted to " then stripped
-        result = MechanicalVerifier._normalize_text('\u201chello world\u201d')
+        result = MechanicalVerifier._normalize_text("\u201chello world\u201d")
         assert result == "hello world"
 
     def test_non_breaking_space_treated_as_space(self) -> None:
@@ -153,9 +152,9 @@ class TestTokenizationArtifactsCausePass:
     """
 
     def test_smart_double_quotes_around_quote(self, verifier: MechanicalVerifier) -> None:
-        chunk = 'The sky is blue on a clear day.'
+        chunk = "The sky is blue on a clear day."
         # LLM wrapped the quote in curly quotes
-        llm_quote = '\u201cThe sky is blue on a clear day.\u201d'
+        llm_quote = "\u201cThe sky is blue on a clear day.\u201d"
         result = verifier.verify("doc_1_chunk_A", chunk, llm_quote)
         assert result.status == "passed", "Smart quotes must not cause a false Tier 5."
 

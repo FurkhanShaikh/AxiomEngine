@@ -21,7 +21,6 @@ from axiom_engine.models import (
     MechanicalVerificationStageConfig,
     ModelConfig,
     PipelineConfig,
-    PipelineStagesConfig,
     SynthesizerOutput,
     TierBreakdown,
     VerificationResult,
@@ -78,7 +77,10 @@ class TestAxiomRequest:
         payload = {
             "request_id": "req_123",
             "user_query": "Explain solid-state batteries.",
-            "app_config": {"expertise_level": "intermediate", "banned_domains": ["reddit.com"]},
+            "app_config": {
+                "expertise_level": "intermediate",
+                "banned_domains": ["reddit.com"],
+            },
             "models": {"synthesizer": "claude-3-opus", "verifier": "llama-3-8b-local"},
             "pipeline_config": {
                 "stages": {
@@ -126,19 +128,24 @@ class TestCitation:
         assert c.chunk_id == "doc_4_chunk_C"
 
     def test_chunk_id_pattern_valid_variants(self) -> None:
-        valid_ids = ["doc_1_chunk_A", "doc_10_chunk_Z", "doc_99_chunk_AB", "doc_1_chunk_1"]
+        valid_ids = [
+            "doc_1_chunk_A",
+            "doc_10_chunk_Z",
+            "doc_99_chunk_AB",
+            "doc_1_chunk_1",
+        ]
         for cid in valid_ids:
             c = Citation(citation_id="c", chunk_id=cid, exact_source_quote="quote")
             assert c.chunk_id == cid
 
     def test_chunk_id_pattern_rejects_malformed(self) -> None:
         bad_ids = [
-            "doc1_chunk_A",      # missing underscore after doc
-            "doc_1_chunkA",      # missing underscore before chunk label
-            "1_chunk_A",         # missing 'doc' prefix
-            "doc_1_chunk_a",     # lowercase chunk label
-            "doc__chunk_A",      # empty doc number
-            "",                  # empty
+            "doc1_chunk_A",  # missing underscore after doc
+            "doc_1_chunkA",  # missing underscore before chunk label
+            "1_chunk_A",  # missing 'doc' prefix
+            "doc_1_chunk_a",  # lowercase chunk label
+            "doc__chunk_A",  # empty doc number
+            "",  # empty
         ]
         for bad in bad_ids:
             with pytest.raises(ValidationError, match="chunk_id"):
@@ -474,7 +481,6 @@ class TestGraphState:
 
     def test_state_is_typeddict(self) -> None:
         """GraphState must be a TypedDict, not a Pydantic model or dataclass."""
-        import typing
 
         hints = GraphState.__annotations__
         assert "user_query" in hints

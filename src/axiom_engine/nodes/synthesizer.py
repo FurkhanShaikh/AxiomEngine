@@ -15,17 +15,21 @@ Responsibilities:
 from __future__ import annotations
 
 import json
+import logging
 import re
-from datetime import datetime, timezone
+from functools import partial
 from typing import Any
-from uuid import uuid4
 
 import litellm
 from pydantic import ValidationError
 
 from axiom_engine.models import SynthesizerOutput
 from axiom_engine.state import GraphState
+from axiom_engine.utils.audit import make_audit_event
 from axiom_engine.utils.llm import build_completion_kwargs
+
+_audit = partial(make_audit_event, "synthesizer")
+logger = logging.getLogger("axiom_engine.synthesizer")
 
 # ---------------------------------------------------------------------------
 # Prompt templates
@@ -156,19 +160,6 @@ def _parse_llm_response(raw: str) -> SynthesizerOutput:
         raise ValueError(f"LLM JSON does not match SynthesizerOutput schema: {exc}") from exc
 
 
-def _make_audit_event(
-    event_type: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "event_id": str(uuid4()),
-        "node": "synthesizer",
-        "event_type": event_type,
-        "payload": payload,
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-    }
-
-
 # ---------------------------------------------------------------------------
 # Node
 # ---------------------------------------------------------------------------
@@ -195,12 +186,10 @@ def synthesizer_node(state: GraphState) -> dict[str, Any]:
     expertise_level: str = app_cfg.get("expertise_level", "intermediate")
 
     # Prefer pre-ranked chunks; fall back to all indexed chunks.
-    chunks: list[dict] = list(
-        state.get("ranked_chunks") or state.get("indexed_chunks") or []
-    )
+    chunks: list[dict] = list(state.get("ranked_chunks") or state.get("indexed_chunks") or [])
 
     audit.append(
-        _make_audit_event(
+        _audit(
             "synthesizer_start",
             {
                 "model": model,
@@ -246,27 +235,29 @@ def synthesizer_node(state: GraphState) -> dict[str, Any]:
             # Category 3: malformed LLM response — inject correction and retry.
             last_error = exc
             audit.append(
-                _make_audit_event(
+                _audit(
                     "synthesizer_malformed_response",
                     {"attempt": attempt, "error": str(exc)},
                 )
             )
             # Inject targeted correction into messages for next attempt.
             messages.append({"role": "assistant", "content": raw_content})
-            messages.append({
-                "role": "user",
-                "content": (
-                    f"Your previous response was invalid: {exc}\n"
-                    "Please respond again with ONLY a valid JSON object matching "
-                    "the SynthesizerOutput schema. No markdown fences."
-                ),
-            })
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"Your previous response was invalid: {exc}\n"
+                        "Please respond again with ONLY a valid JSON object matching "
+                        "the SynthesizerOutput schema. No markdown fences."
+                    ),
+                }
+            )
 
         except Exception as exc:
             # Category 2: LLM API failure — record and surface immediately.
             last_error = exc
             audit.append(
-                _make_audit_event(
+                _audit(
                     "synthesizer_api_error",
                     {"attempt": attempt, "error": str(exc)},
                 )
@@ -276,7 +267,7 @@ def synthesizer_node(state: GraphState) -> dict[str, Any]:
     if output is None:
         # All attempts exhausted — degrade gracefully.
         audit.append(
-            _make_audit_event(
+            _audit(
                 "synthesizer_failed",
                 {"error": str(last_error), "action": "marking unanswerable"},
             )
@@ -290,7 +281,7 @@ def synthesizer_node(state: GraphState) -> dict[str, Any]:
     # is_answerable escape hatch triggered by the LLM itself.
     if not output.is_answerable:
         audit.append(
-            _make_audit_event(
+            _audit(
                 "synthesizer_unanswerable",
                 {"reason": "LLM set is_answerable=false — chunks lack sufficient data."},
             )
@@ -304,7 +295,7 @@ def synthesizer_node(state: GraphState) -> dict[str, Any]:
     draft_dicts = [s.model_dump() for s in output.sentences]
 
     audit.append(
-        _make_audit_event(
+        _audit(
             "synthesizer_complete",
             {
                 "sentence_count": len(draft_dicts),

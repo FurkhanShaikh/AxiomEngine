@@ -51,9 +51,7 @@ def build_completion_kwargs(
     }
 
     if model.startswith("ollama/"):
-        kwargs["api_base"] = os.environ.get(
-            "OLLAMA_API_BASE", "http://localhost:11434"
-        )
+        kwargs["api_base"] = os.environ.get("OLLAMA_API_BASE", "http://localhost:11434")
         # Disable chain-of-thought thinking for Qwen3-family models.
         # `think` is a top-level Ollama API parameter; other models ignore it.
         kwargs["extra_body"] = {"think": False}
