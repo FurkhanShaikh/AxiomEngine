@@ -506,8 +506,12 @@ class TestCacheIsolation:
         }
         with patch.object(app.state, "engine", create=True) as mock_engine:
             mock_engine.invoke.return_value = graph_result
-            no_debug = client.post("/v1/synthesize", json={**_VALID_REQUEST, "include_debug": False})
-            with_debug = client.post("/v1/synthesize", json={**_VALID_REQUEST, "include_debug": True})
+            no_debug = client.post(
+                "/v1/synthesize", json={**_VALID_REQUEST, "include_debug": False}
+            )
+            with_debug = client.post(
+                "/v1/synthesize", json={**_VALID_REQUEST, "include_debug": True}
+            )
 
         assert no_debug.status_code == 200
         assert with_debug.status_code == 200

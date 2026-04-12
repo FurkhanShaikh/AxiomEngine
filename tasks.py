@@ -38,6 +38,7 @@ def _echo(message: str = "") -> None:
 # Tasks
 # ---------------------------------------------------------------------------
 
+
 def install() -> None:
     """Scaffold .env, create virtual environment, and install all dependencies."""
     env = pathlib.Path(".env")
@@ -92,7 +93,7 @@ def probe() -> None:
     if "--model" in args:
         idx = args.index("--model")
         model = args[idx + 1]
-        args = args[:idx] + args[idx + 2:]
+        args = args[:idx] + args[idx + 2 :]
 
     query = " ".join(args) if args else "What is the capital of France?"
 
@@ -138,9 +139,9 @@ def probe() -> None:
 
     for i, s in enumerate(sentences, 1):
         vr = s.get("verification", {})
-        _echo(f"  [{i}] Tier {vr.get('tier','?')} ({vr.get('tier_label','?')}) — {s['text']}")
+        _echo(f"  [{i}] Tier {vr.get('tier', '?')} ({vr.get('tier_label', '?')}) — {s['text']}")
         for c in s.get("citations", []):
-            _echo(f"       cite: \"{c['exact_source_quote'][:80]}\"")
+            _echo(f'       cite: "{c["exact_source_quote"][:80]}"')
             _echo(f"       from: {c['chunk_id']}")
 
     # ── Debug info ────────────────────────────────────────────────────────────
@@ -170,9 +171,7 @@ def clean() -> None:
 # ---------------------------------------------------------------------------
 
 _TASKS = {
-    name: fn
-    for name, fn in sorted(globals().items())
-    if callable(fn) and not name.startswith("_")
+    name: fn for name, fn in sorted(globals().items()) if callable(fn) and not name.startswith("_")
 }
 
 

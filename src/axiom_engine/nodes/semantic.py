@@ -263,6 +263,8 @@ def _aggregate_sentence_verification(
         semantic_check="passed" if all_semantic_passed else "skipped",
         failure_reason=fallback_reason,
     )
+
+
 def _verify_citation(
     claim_text: str,
     citation: Citation,

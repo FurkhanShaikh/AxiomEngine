@@ -174,7 +174,9 @@ def _parse_llm_response(raw: str) -> SynthesizerOutput:
         ]
         if unsupported:
             joined = ", ".join(unsupported)
-            raise ValueError(f"Every answer sentence must be cited. Unsupported sentence_ids: {joined}")
+            raise ValueError(
+                f"Every answer sentence must be cited. Unsupported sentence_ids: {joined}"
+            )
 
     return output
 
