@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from axiom_engine.config.observability import get_tracer
 from axiom_engine.state import GraphState
 from axiom_engine.utils.audit import make_audit_event
 
@@ -244,7 +245,11 @@ def retriever_node(state: GraphState) -> dict[str, Any]:
 
     # Run all search queries in parallel; results arrive in submission order
     # so doc_counter assignment is deterministic across calls.
-    with ThreadPoolExecutor(max_workers=len(queries)) as executor:
+    tracer = get_tracer()
+    with (
+        tracer.start_as_current_span("retriever.search", attributes={"query_count": len(queries)}),
+        ThreadPoolExecutor(max_workers=len(queries)) as executor,
+    ):
         search_outcomes = list(executor.map(_safe_search, queries))
 
     for query, results, exc in search_outcomes:

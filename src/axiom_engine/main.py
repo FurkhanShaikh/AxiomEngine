@@ -21,8 +21,6 @@ import json
 import logging
 import os
 import threading
-import time
-from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
@@ -38,6 +36,16 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from axiom_engine.config.logging import configure_logging, request_id_ctx
+from axiom_engine.config.observability import (
+    CACHE_HITS,
+    CACHE_MISSES,
+    PIPELINE_DURATION,
+    REQUESTS_BY_STATUS,
+    TIER_ASSIGNMENTS,
+    run_with_otel_context,
+    setup_prometheus,
+    setup_tracing,
+)
 from axiom_engine.graph import build_axiom_graph
 from axiom_engine.models import (
     AuditEvent,
@@ -93,35 +101,6 @@ async def verify_api_key(
     if not api_key or api_key not in _API_KEYS:
         raise HTTPException(status_code=401, detail="Invalid or missing API key.")
     return api_key
-
-
-# ---------------------------------------------------------------------------
-# Runtime metrics (thread-safe)
-# ---------------------------------------------------------------------------
-
-_metrics_lock = threading.Lock()
-_metrics: dict[str, Any] = {
-    "requests_total": 0,
-    "requests_success": 0,
-    "requests_partial": 0,
-    "requests_unanswerable": 0,
-    "requests_error": 0,
-    "requests_cache_hits": 0,
-    "tier_counts": defaultdict(int),
-    "started_at": 0.0,  # set in lifespan
-}
-
-
-def _inc_metric(key: str, amount: int = 1) -> None:
-    """Thread-safe metric increment."""
-    with _metrics_lock:
-        _metrics[key] += amount
-
-
-def _inc_tier(tier_key: str) -> None:
-    """Thread-safe tier counter increment."""
-    with _metrics_lock:
-        _metrics["tier_counts"][tier_key] += 1
 
 
 # ---------------------------------------------------------------------------
@@ -334,8 +313,9 @@ async def lifespan(app: FastAPI):
             "Set TAVILY_API_KEY in .env for live web search."
         )
 
+    setup_tracing(app, "axiom-engine", _VERSION)
+
     app.state.engine = build_axiom_graph()
-    _metrics["started_at"] = time.monotonic()
     logger.info("Axiom Engine graph compiled and ready.")
     yield
     logger.info("Axiom Engine shutting down.")
@@ -369,6 +349,10 @@ app.add_middleware(
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+
+# Prometheus instrumentation must happen at module level (before the app starts),
+# because it adds middleware which Starlette forbids after startup.
+setup_prometheus(app)
 
 
 # ---------------------------------------------------------------------------
@@ -412,31 +396,6 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/metrics", summary="Basic runtime metrics for ops dashboards.")
-@limiter.exempt
-async def metrics() -> dict[str, Any]:
-    """
-    Returns request counts, cache hit rate, tier distribution, and uptime.
-    Designed for Prometheus scraping or ops dashboards.
-    """
-    total = _metrics["requests_total"]
-    hit_rate = round(_metrics["requests_cache_hits"] / total, 4) if total > 0 else 0.0
-    uptime = time.monotonic() - _metrics["started_at"]
-    with _metrics_lock:
-        tier_dist = dict(_metrics["tier_counts"])
-    return {
-        "uptime_seconds": round(uptime, 1),
-        "requests_total": total,
-        "requests_success": _metrics["requests_success"],
-        "requests_partial": _metrics["requests_partial"],
-        "requests_unanswerable": _metrics["requests_unanswerable"],
-        "requests_error": _metrics["requests_error"],
-        "cache_hits": _metrics["requests_cache_hits"],
-        "cache_hit_rate": hit_rate,
-        "tier_distribution": tier_dist,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
@@ -456,15 +415,15 @@ async def synthesize(
     a fully validated AxiomResponse with tier breakdown and confidence score.
     """
     request_id_ctx.set(payload.request_id)
-    _inc_metric("requests_total")
 
     # Cache lookup — skip for error/unanswerable; only cache clean results.
     key = _cache_key(payload)
     cached = _get_cached(key)
     if cached is not None:
-        _inc_metric("requests_cache_hits")
+        CACHE_HITS.inc()
         logger.info("Cache hit for request %s", payload.request_id)
         return cached
+    CACHE_MISSES.inc()
 
     initial_state = make_initial_state(
         request_id=payload.request_id,
@@ -476,18 +435,20 @@ async def synthesize(
 
     try:
         engine = app.state.engine
-        graph_result = await asyncio.to_thread(engine.invoke, initial_state)
+        ctx_fn = run_with_otel_context(engine.invoke, initial_state)
+        with PIPELINE_DURATION.time():
+            graph_result = await asyncio.to_thread(ctx_fn)
     except Exception as exc:
-        _inc_metric("requests_error")
+        REQUESTS_BY_STATUS.labels(status="error").inc()
         return make_error_response(payload.request_id, exc)
 
     response = marshal_response(payload.request_id, graph_result, payload.include_debug)
 
-    # Update metrics.
-    _inc_metric(f"requests_{response.status}")
+    # Update Prometheus metrics.
+    REQUESTS_BY_STATUS.labels(status=response.status).inc()
     for sentence in graph_result.get("final_sentences", []):
         tier = sentence.get("verification", {}).get("tier", 3)
-        _inc_tier(f"tier_{tier}")
+        TIER_ASSIGNMENTS.labels(tier=str(tier)).inc()
 
     # Cache successful and partial responses.
     if response.status in ("success", "partial"):

@@ -35,11 +35,13 @@ import logging
 import os
 import re
 import threading
+import time
 from functools import partial
 from typing import Any, Literal, cast
 
 import litellm
 
+from axiom_engine.config.observability import LLM_CALL_DURATION, get_tracer
 from axiom_engine.models import (
     Citation,
     FinalSentence,
@@ -235,8 +237,15 @@ def _verify_citation(
             messages=messages,
             temperature=0.0,
         )
-        with _llm_semaphore:
-            response = litellm.completion(**completion_kwargs)
+        tracer = get_tracer()
+        with tracer.start_as_current_span(
+            "semantic.llm_call",
+            attributes={"model": model, "chunk_id": chunk_id},
+        ):
+            start = time.monotonic()
+            with _llm_semaphore:
+                response = litellm.completion(**completion_kwargs)
+            LLM_CALL_DURATION.labels(node="semantic", model=model).observe(time.monotonic() - start)
         raw: str = response.choices[0].message.content or ""
         data = _parse_semantic_response(raw)
     except Exception as exc:

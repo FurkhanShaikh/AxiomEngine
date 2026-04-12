@@ -19,12 +19,14 @@ import logging
 import os
 import re
 import threading
+import time
 from functools import partial
 from typing import Any
 
 import litellm
 from pydantic import ValidationError
 
+from axiom_engine.config.observability import LLM_CALL_DURATION, get_tracer
 from axiom_engine.models import SynthesizerOutput
 from axiom_engine.state import GraphState
 from axiom_engine.utils.audit import make_audit_event
@@ -225,6 +227,8 @@ def synthesizer_node(state: GraphState) -> dict[str, Any]:
     output: SynthesizerOutput | None = None
     raw_content: str = ""  # Initialized so the retry correction message is always safe.
 
+    tracer = get_tracer()
+
     for attempt in range(1, MAX_PARSE_RETRIES + 1):
         try:
             completion_kwargs = build_completion_kwargs(
@@ -232,8 +236,16 @@ def synthesizer_node(state: GraphState) -> dict[str, Any]:
                 messages=messages,
                 temperature=0.0,  # deterministic output for citation integrity
             )
-            with _llm_semaphore:
-                response = litellm.completion(**completion_kwargs)
+            with tracer.start_as_current_span(
+                "synthesizer.llm_call",
+                attributes={"model": model, "attempt": attempt},
+            ):
+                start = time.monotonic()
+                with _llm_semaphore:
+                    response = litellm.completion(**completion_kwargs)
+                LLM_CALL_DURATION.labels(node="synthesizer", model=model).observe(
+                    time.monotonic() - start
+                )
             raw_content = response.choices[0].message.content or ""
             output = _parse_llm_response(raw_content)
             break

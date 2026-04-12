@@ -23,6 +23,7 @@ import logging
 from functools import partial
 from typing import Any, cast
 
+from axiom_engine.config.observability import get_tracer
 from axiom_engine.nodes.semantic import semantic_verifier_node
 from axiom_engine.state import GraphState
 from axiom_engine.utils.audit import make_audit_event
@@ -56,6 +57,15 @@ def verification_node(state: GraphState) -> dict[str, Any]:
     Returns keys: final_sentences, rewrite_requests, loop_count,
                   mechanical_results, audit_trail
     """
+    tracer = get_tracer()
+    with tracer.start_as_current_span(
+        "verification", attributes={"loop_count": state.get("loop_count", 0)}
+    ):
+        return _run_verification(state)
+
+
+def _run_verification(state: GraphState) -> dict[str, Any]:
+    """Inner verification logic, wrapped by the OTel span in verification_node."""
     audit: list[dict[str, Any]] = []
     draft_sentences: list[dict] = list(state.get("draft_sentences") or [])
     indexed_chunks: list[dict] = list(state.get("indexed_chunks") or [])

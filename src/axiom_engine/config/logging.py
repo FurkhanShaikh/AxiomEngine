@@ -18,6 +18,8 @@ import sys
 from contextvars import ContextVar
 from datetime import UTC, datetime
 
+from opentelemetry import trace
+
 # ---------------------------------------------------------------------------
 # Context variable for request-scoped correlation
 # ---------------------------------------------------------------------------
@@ -49,7 +51,7 @@ class _JSONFormatter(logging.Formatter):
     """Structured JSON formatter for production log aggregation."""
 
     def format(self, record: logging.LogRecord) -> str:
-        entry = {
+        entry: dict[str, object] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
@@ -58,6 +60,12 @@ class _JSONFormatter(logging.Formatter):
         rid = request_id_ctx.get()
         if rid:
             entry["request_id"] = rid
+        # Inject OpenTelemetry trace context for log-to-trace correlation.
+        span = trace.get_current_span()
+        ctx = span.get_span_context()
+        if ctx and ctx.trace_id:
+            entry["trace_id"] = format(ctx.trace_id, "032x")
+            entry["span_id"] = format(ctx.span_id, "016x")
         if record.exc_info and record.exc_info[1]:
             entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(entry, default=str)
