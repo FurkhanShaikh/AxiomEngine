@@ -6,6 +6,7 @@ Run with:  pytest axiom_engine/test_models.py -v
 from __future__ import annotations
 
 import operator
+from typing import get_type_hints
 
 import pytest
 from pydantic import ValidationError
@@ -24,6 +25,7 @@ from axiom_engine.models import (
     SynthesizerOutput,
     TierBreakdown,
     VerificationResult,
+    VerifiedCitation,
 )
 from axiom_engine.state import GraphState, make_initial_state
 
@@ -37,6 +39,8 @@ class TestAppConfig:
         cfg = AppConfig()
         assert cfg.expertise_level == "intermediate"
         assert cfg.banned_domains == []
+        assert cfg.authoritative_domains == []
+        assert cfg.low_quality_domains == []
 
     def test_valid_expertise_levels(self) -> None:
         for level in ("beginner", "intermediate", "expert"):
@@ -80,6 +84,8 @@ class TestAxiomRequest:
             "app_config": {
                 "expertise_level": "intermediate",
                 "banned_domains": ["reddit.com"],
+                "authoritative_domains": ["internal.example.com"],
+                "low_quality_domains": ["spam.example.com"],
             },
             "models": {"synthesizer": "claude-3-opus", "verifier": "llama-3-8b-local"},
             "pipeline_config": {
@@ -92,6 +98,7 @@ class TestAxiomRequest:
         }
         req = AxiomRequest(**payload)
         assert req.app_config.banned_domains == ["reddit.com"]
+        assert req.app_config.authoritative_domains == ["internal.example.com"]
         assert req.models.synthesizer == "claude-3-opus"
 
 
@@ -329,10 +336,11 @@ class TestFinalSentence:
             text="A misrepresented sentence.",
             is_cited=True,
             citations=[
-                Citation(
+                VerifiedCitation(
                     citation_id="c1",
                     chunk_id="doc_1_chunk_B",
                     exact_source_quote="Some quote.",
+                    verification=self._make_verification(4),
                 )
             ],
             verification=self._make_verification(4),
@@ -426,11 +434,14 @@ class TestGraphState:
             "pipeline_config",
             "search_queries",
             "indexed_chunks",
+            "next_doc_index",
             "is_answerable",
             "draft_sentences",
             "rewrite_requests",
             "pending_rewrite_count",
             "loop_count",
+            "retrieval_retry_count",
+            "mechanical_results",
             "final_sentences",
             "audit_trail",
         }
@@ -439,25 +450,19 @@ class TestGraphState:
     def test_initial_state_zero_values(self) -> None:
         state = make_initial_state("r", "q", {}, {}, {})
         assert state["indexed_chunks"] == []
+        assert state["next_doc_index"] == 1
         assert state["rewrite_requests"] == []
         assert state["audit_trail"] == []
         assert state["loop_count"] == 0
+        assert state["retrieval_retry_count"] == 0
+        assert state["mechanical_results"] == {}
         assert state["is_answerable"] is True
         assert state["draft_sentences"] == []
         assert state["final_sentences"] == []
 
-    def test_operator_add_reducer_appends_indexed_chunks(self) -> None:
-        """
-        Simulate LangGraph's reducer behaviour for operator.add fields.
-        When a node returns a partial state dict with new chunks, LangGraph
-        calls operator.add(existing, new) — verifying it appends, not replaces.
-        """
-        existing: list[dict] = [{"chunk_id": "doc_1_chunk_A", "text": "First chunk."}]
-        new_chunks: list[dict] = [{"chunk_id": "doc_1_chunk_B", "text": "Second chunk."}]
-        merged = operator.add(existing, new_chunks)
-        assert len(merged) == 2
-        assert merged[0]["chunk_id"] == "doc_1_chunk_A"
-        assert merged[1]["chunk_id"] == "doc_1_chunk_B"
+    def test_indexed_chunks_is_plain_list_not_append_reducer(self) -> None:
+        annotation = get_type_hints(GraphState)["indexed_chunks"]
+        assert annotation == list[dict]
 
     def test_operator_add_reducer_appends_audit_trail(self) -> None:
         """Audit events from multiple nodes accumulate; no event is ever lost."""
@@ -468,12 +473,9 @@ class TestGraphState:
         assert full_trail[0]["node"] == "retriever"
         assert full_trail[1]["node"] == "synthesizer"
 
-    def test_operator_add_reducer_appends_rewrite_requests(self) -> None:
-        """Rewrite history must accumulate so the Synthesizer sees full context."""
-        first_pass = ["Tier 5 failure on cite_1: quote not found in doc_1_chunk_A."]
-        second_pass = ["Tier 4 failure on cite_2: context inverted."]
-        combined = operator.add(first_pass, second_pass)
-        assert len(combined) == 2
+    def test_rewrite_requests_is_plain_list_not_append_reducer(self) -> None:
+        annotation = get_type_hints(GraphState)["rewrite_requests"]
+        assert annotation == list[str]
 
     def test_loop_count_initial_value(self) -> None:
         state = make_initial_state("r", "q", {}, {}, {})

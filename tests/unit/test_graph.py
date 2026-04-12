@@ -98,9 +98,17 @@ _SAMPLE_CHUNKS = [
             "Solid-state batteries replace liquid electrolytes with solid ceramics. "
             "This substitution significantly improves thermal stability and energy density."
         ),
-        "source_url": "https://example.com/batteries",
-        "is_authoritative": True,
+        "source_url": "https://science.org/article",
+        "domain": "science.org",
     },
+]
+
+_SEARCH_RESULTS = [
+    {
+        "url": "https://science.org/article",
+        "content": _SAMPLE_CHUNKS[0]["text"],
+        "title": "Solid-State Battery Review",
+    }
 ]
 
 
@@ -211,6 +219,7 @@ class TestEndToEndLoop:
     @patch("litellm.completion")
     def test_happy_path_single_pass(self, mock_llm: MagicMock) -> None:
         """Correct verbatim quote → mechanical pass → semantic pass → END."""
+        set_search_backend(MockSearchBackend(_SEARCH_RESULTS))
         synth_json = json.dumps(
             {
                 "is_answerable": True,
@@ -234,7 +243,6 @@ class TestEndToEndLoop:
         )
         semantic_json = json.dumps(
             {
-                "tier": 1,
                 "semantic_check": "passed",
                 "failure_reason": None,
                 "reasoning": "Claim faithfully represents the authoritative source.",
@@ -243,7 +251,7 @@ class TestEndToEndLoop:
         mock_llm.side_effect = _make_model_router([synth_json], [semantic_json])
 
         graph = build_axiom_graph()
-        result = graph.invoke(_base_state(indexed_chunks=_SAMPLE_CHUNKS))
+        result = graph.invoke(_base_state())
 
         assert result["is_answerable"] is True
         assert len(result["final_sentences"]) == 1
@@ -256,6 +264,7 @@ class TestEndToEndLoop:
         Pass 1: Fabricated quote → Mechanical Tier 5 → loops back.
         Pass 2: Corrected verbatim quote → passes → END.
         """
+        set_search_backend(MockSearchBackend(_SEARCH_RESULTS))
         hallucinated_json = json.dumps(
             {
                 "is_answerable": True,
@@ -298,7 +307,6 @@ class TestEndToEndLoop:
         )
         semantic_json = json.dumps(
             {
-                "tier": 1,
                 "semantic_check": "passed",
                 "failure_reason": None,
                 "reasoning": "Claim faithfully represents the source.",
@@ -310,7 +318,7 @@ class TestEndToEndLoop:
         )
 
         graph = build_axiom_graph()
-        result = graph.invoke(_base_state(indexed_chunks=_SAMPLE_CHUNKS))
+        result = graph.invoke(_base_state())
 
         assert result["is_answerable"] is True
         assert len(result["final_sentences"]) == 1
@@ -320,6 +328,7 @@ class TestEndToEndLoop:
     @patch("litellm.completion")
     def test_escape_hatch_terminates_immediately(self, mock_llm: MagicMock) -> None:
         """is_answerable=false → END without entering verification."""
+        set_search_backend(MockSearchBackend(_SEARCH_RESULTS))
         unanswerable_json = json.dumps(
             {
                 "is_answerable": False,
@@ -329,7 +338,7 @@ class TestEndToEndLoop:
         mock_llm.side_effect = _make_model_router([unanswerable_json], [])
 
         graph = build_axiom_graph()
-        result = graph.invoke(_base_state(indexed_chunks=_SAMPLE_CHUNKS))
+        result = graph.invoke(_base_state())
 
         assert result["is_answerable"] is False
         assert result.get("final_sentences", []) == [] or result["final_sentences"] == []
@@ -339,6 +348,7 @@ class TestEndToEndLoop:
         """
         Synthesizer keeps hallucinating. After 3 loops the graph terminates.
         """
+        set_search_backend(MockSearchBackend(_SEARCH_RESULTS))
         hallucinated_json = json.dumps(
             {
                 "is_answerable": True,
@@ -367,9 +377,10 @@ class TestEndToEndLoop:
         graph = build_axiom_graph()
         # Set retrieval_retry_count=1 so re-retrieve is exhausted; we're testing
         # rewrite loop exhaustion specifically, not re-retrieve.
-        result = graph.invoke(_base_state(indexed_chunks=_SAMPLE_CHUNKS, retrieval_retry_count=1))
+        result = graph.invoke(_base_state(retrieval_retry_count=1))
 
         assert result["loop_count"] == 3
+        assert result["final_sentences"][0]["verification"]["tier"] == 5
 
     @patch("litellm.completion")
     def test_tier_4_semantic_failure_triggers_rewrite(self, mock_llm: MagicMock) -> None:
@@ -377,6 +388,7 @@ class TestEndToEndLoop:
         Mechanical passes but semantic finds misrepresentation (Tier 4).
         Graph loops back for a rewrite, second pass succeeds.
         """
+        set_search_backend(MockSearchBackend(_SEARCH_RESULTS))
         synth_json = json.dumps(
             {
                 "is_answerable": True,
@@ -421,7 +433,6 @@ class TestEndToEndLoop:
         )
         tier4_json = json.dumps(
             {
-                "tier": 4,
                 "semantic_check": "failed",
                 "failure_reason": "Claim overstates 'improves' as 'perfect'.",
                 "reasoning": "The source says 'improves' not 'perfect'.",
@@ -429,7 +440,6 @@ class TestEndToEndLoop:
         )
         tier1_json = json.dumps(
             {
-                "tier": 1,
                 "semantic_check": "passed",
                 "failure_reason": None,
                 "reasoning": "Claim now faithfully represents the source.",
@@ -441,7 +451,7 @@ class TestEndToEndLoop:
         )
 
         graph = build_axiom_graph()
-        result = graph.invoke(_base_state(indexed_chunks=_SAMPLE_CHUNKS))
+        result = graph.invoke(_base_state())
 
         assert result["is_answerable"] is True
         assert result["final_sentences"][0]["verification"]["tier"] == 1
@@ -449,6 +459,7 @@ class TestEndToEndLoop:
     @patch("litellm.completion")
     def test_audit_trail_accumulates_across_loops(self, mock_llm: MagicMock) -> None:
         """The audit_trail must accumulate events from every pass, never overwrite."""
+        set_search_backend(MockSearchBackend(_SEARCH_RESULTS))
         hallucinated_json = json.dumps(
             {
                 "is_answerable": True,
@@ -491,7 +502,6 @@ class TestEndToEndLoop:
         )
         semantic_json = json.dumps(
             {
-                "tier": 1,
                 "semantic_check": "passed",
                 "failure_reason": None,
                 "reasoning": "ok",
@@ -503,7 +513,7 @@ class TestEndToEndLoop:
         )
 
         graph = build_axiom_graph()
-        result = graph.invoke(_base_state(indexed_chunks=_SAMPLE_CHUNKS))
+        result = graph.invoke(_base_state())
 
         trail = result.get("audit_trail", [])
         assert len(trail) > 0
@@ -568,7 +578,6 @@ class TestFullPipelineIntegration:
         )
         semantic_json = json.dumps(
             {
-                "tier": 1,
                 "semantic_check": "passed",
                 "failure_reason": None,
                 "reasoning": "Faithfully represents the source.",
@@ -642,7 +651,6 @@ class TestFullPipelineIntegration:
         )
         semantic_json = json.dumps(
             {
-                "tier": 2,
                 "semantic_check": "passed",
                 "failure_reason": None,
                 "reasoning": "Consensus source.",

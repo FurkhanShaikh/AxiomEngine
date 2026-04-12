@@ -19,6 +19,8 @@ class AppConfig(BaseModel):
 
     expertise_level: Literal["beginner", "intermediate", "expert"] = "intermediate"
     banned_domains: list[str] = Field(default_factory=list, max_length=100)
+    authoritative_domains: list[str] = Field(default_factory=list, max_length=100)
+    low_quality_domains: list[str] = Field(default_factory=list, max_length=100)
 
 
 class ModelConfig(BaseModel):
@@ -154,9 +156,19 @@ class VerificationResult(BaseModel):
     model_config = {"frozen": True}
 
 
-class FinalSentence(DraftSentence):
+class VerifiedCitation(Citation):
+    """A citation annotated with verification outcome."""
+
+    verification: VerificationResult
+
+
+class FinalSentence(BaseModel):
     """A verified sentence ready for the response payload."""
 
+    sentence_id: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1)
+    is_cited: bool
+    citations: list[VerifiedCitation] = Field(default_factory=list)
     verification: VerificationResult
 
 

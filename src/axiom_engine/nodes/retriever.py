@@ -234,7 +234,7 @@ def retriever_node(state: GraphState) -> dict[str, Any]:
     )
 
     indexed_chunks: list[dict[str, Any]] = []
-    doc_counter = 1
+    doc_counter = int(state.get("next_doc_index", 1))
     total_results = 0
     total_banned = 0
     total_duplicate_urls = 0
@@ -332,5 +332,6 @@ def retriever_node(state: GraphState) -> dict[str, Any]:
     return {
         "search_queries": queries,
         "indexed_chunks": indexed_chunks,
+        "next_doc_index": doc_counter,
         "audit_trail": audit,
     }

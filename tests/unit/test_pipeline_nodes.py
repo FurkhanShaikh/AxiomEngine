@@ -238,6 +238,26 @@ class TestRetrieverNode:
             assert "<p>" not in chunk["text"]
             assert "</p>" not in chunk["text"]
 
+    def test_chunk_ids_remain_unique_across_retrieval_passes(self) -> None:
+        backend = MockSearchBackend(
+            [
+                {
+                    "url": "https://example.com/a",
+                    "content": "Long paragraph with enough content to pass the minimum length filter.",
+                    "title": "A",
+                }
+            ]
+        )
+        set_search_backend(backend)
+        state = _base_state()
+
+        first = retriever_node(state)
+        state["next_doc_index"] = first["next_doc_index"]
+        second = retriever_node(state)
+
+        assert first["indexed_chunks"][0]["chunk_id"] == "doc_1_chunk_A"
+        assert second["indexed_chunks"][0]["chunk_id"] == "doc_2_chunk_A"
+
 
 # ===========================================================================
 # B. Scorer tests

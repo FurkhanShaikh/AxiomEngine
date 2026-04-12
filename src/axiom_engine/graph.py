@@ -90,6 +90,10 @@ def retriever_with_retry(state: GraphState) -> dict:
     # Reset loop_count so the synthesizer gets fresh rewrite attempts.
     result["loop_count"] = 0
     result["pending_rewrite_count"] = 0
+    result["rewrite_requests"] = []
+    result["draft_sentences"] = []
+    result["final_sentences"] = []
+    result["mechanical_results"] = {}
     return result
 
 

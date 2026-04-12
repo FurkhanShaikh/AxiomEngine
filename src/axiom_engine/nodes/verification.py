@@ -24,6 +24,7 @@ from functools import partial
 from typing import Any, cast
 
 from axiom_engine.config.observability import get_tracer
+from axiom_engine.models import VerificationResult
 from axiom_engine.nodes.semantic import semantic_verifier_node
 from axiom_engine.state import GraphState
 from axiom_engine.utils.audit import make_audit_event
@@ -84,7 +85,7 @@ def _run_verification(state: GraphState) -> dict[str, Any]:
     # ------------------------------------------------------------------
     # Stage 1: Mechanical Verification
     # ------------------------------------------------------------------
-    mechanical_results: dict[str, str] = {}
+    mechanical_results: dict[str, dict[str, Any]] = {}
     mechanical_rewrite_requests: list[str] = []
 
     for sentence_dict in draft_sentences:
@@ -99,7 +100,13 @@ def _run_verification(state: GraphState) -> dict[str, Any]:
             chunk_data = chunk_lookup.get(chunk_id)
             if chunk_data is None:
                 # Chunk not found — treat as Tier 5.
-                mechanical_results[cit_id] = "failed"
+                mechanical_results[cit_id] = VerificationResult(
+                    tier=5,
+                    tier_label="hallucinated",
+                    mechanical_check="failed",
+                    semantic_check="skipped",
+                    failure_reason=f"Chunk {chunk_id} not found in indexed_chunks.",
+                ).model_dump()
                 mechanical_rewrite_requests.append(
                     _build_tier5_rewrite_request(
                         sentence_id,
@@ -123,7 +130,25 @@ def _run_verification(state: GraphState) -> dict[str, Any]:
                 llm_quote=exact_quote,
             )
 
-            mechanical_results[cit_id] = result.status
+            if result.status == "failed":
+                mechanical_results[cit_id] = VerificationResult(
+                    tier=5,
+                    tier_label="hallucinated",
+                    mechanical_check="failed",
+                    semantic_check="skipped",
+                    failure_reason=result.audit_proof.get(
+                        "failure_reason",
+                        "Normalized quote not found in chunk.",
+                    ),
+                ).model_dump()
+            else:
+                mechanical_results[cit_id] = VerificationResult(
+                    tier=3,
+                    tier_label="model_assisted",
+                    mechanical_check="passed",
+                    semantic_check="skipped",
+                    failure_reason=None,
+                ).model_dump()
             audit.append(
                 _audit(
                     "mechanical_result",
@@ -137,7 +162,7 @@ def _run_verification(state: GraphState) -> dict[str, Any]:
                         sentence_id,
                         cit_id,
                         chunk_id,
-                        result.audit_proof.get(
+                        cast(dict[str, Any], mechanical_results[cit_id]).get(
                             "failure_reason",
                             "Normalized quote not found in chunk.",
                         ),
@@ -149,8 +174,16 @@ def _run_verification(state: GraphState) -> dict[str, Any]:
             "mechanical_phase_complete",
             {
                 "total_citations": len(mechanical_results),
-                "passed": sum(1 for v in mechanical_results.values() if v == "passed"),
-                "failed": sum(1 for v in mechanical_results.values() if v == "failed"),
+                "passed": sum(
+                    1
+                    for payload in mechanical_results.values()
+                    if payload.get("mechanical_check") == "passed"
+                ),
+                "failed": sum(
+                    1
+                    for payload in mechanical_results.values()
+                    if payload.get("mechanical_check") == "failed"
+                ),
             },
         )
     )

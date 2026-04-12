@@ -23,9 +23,15 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 
+_SERVER_URL = "http://localhost:8000"
+
 
 def _run(*cmd: str) -> None:
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True)  # noqa: S603
+
+
+def _echo(message: str = "") -> None:
+    sys.stdout.write(f"{message}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -37,8 +43,8 @@ def install() -> None:
     env = pathlib.Path(".env")
     if not env.exists():
         shutil.copy(".env.example", ".env")
-        print("\n  .env created from .env.example.")
-        print("  Open it and fill in your TAVILY_API_KEY before running.\n")
+        _echo("\n  .env created from .env.example.")
+        _echo("  Open it and fill in your TAVILY_API_KEY before running.\n")
     _run("uv", "sync")
 
 
@@ -54,15 +60,15 @@ def test() -> None:
 
 def lint() -> None:
     """Run ruff (style + imports) and mypy (types) across the codebase."""
-    _run("uv", "run", "ruff", "check", "src", "tests")
-    _run("uv", "run", "ruff", "format", "--check", "src", "tests")
+    _run("uv", "run", "ruff", "check", ".")
+    _run("uv", "run", "ruff", "format", "--check", ".")
     _run("uv", "run", "mypy", "src")
 
 
-def format() -> None:  # noqa: A001
+def format() -> None:
     """Auto-format and fix import order with ruff."""
-    _run("uv", "run", "ruff", "format", "src", "tests")
-    _run("uv", "run", "ruff", "check", "--fix", "src", "tests")
+    _run("uv", "run", "ruff", "format", ".")
+    _run("uv", "run", "ruff", "check", "--fix", ".")
 
 
 def probe() -> None:
@@ -97,24 +103,24 @@ def probe() -> None:
         "include_debug": debug,
     }
 
-    print(f"\n  Query : {query}")
-    print(f"  Model : {model}")
-    print(f"  Debug : {debug}")
-    print(f"  Server: http://localhost:8000\n")
+    _echo(f"\n  Query : {query}")
+    _echo(f"  Model : {model}")
+    _echo(f"  Debug : {debug}")
+    _echo(f"  Server: {_SERVER_URL}\n")
 
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        "http://localhost:8000/v1/synthesize",
+    req = urllib.request.Request(  # noqa: S310
+        f"{_SERVER_URL}/v1/synthesize",
         data=data,
         headers={"Content-Type": "application/json"},
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=700) as resp:
+        with urllib.request.urlopen(req, timeout=700) as resp:  # noqa: S310
             result = json.loads(resp.read())
     except urllib.error.URLError as exc:
-        print(f"  Could not reach server: {exc}")
-        print("  Is it running? Try: python tasks.py run")
+        _echo(f"  Could not reach server: {exc}")
+        _echo("  Is it running? Try: python tasks.py run")
         sys.exit(1)
 
     # ── Summary ──────────────────────────────────────────────────────────────
@@ -123,31 +129,31 @@ def probe() -> None:
     tiers = result.get("confidence_summary", {}).get("tier_breakdown", {})
     sentences = result.get("final_response", [])
 
-    print(f"  Status : {status}")
-    print(f"  Score  : {score:.2f}")
-    print(f"  Tiers  : { {k: v for k, v in tiers.items() if v > 0} or 'none' }")
+    _echo(f"  Status : {status}")
+    _echo(f"  Score  : {score:.2f}")
+    _echo(f"  Tiers  : { {k: v for k, v in tiers.items() if v > 0} or 'none' }")
     if result.get("error_message"):
-        print(f"  Error  : {result['error_message']}")
-    print()
+        _echo(f"  Error  : {result['error_message']}")
+    _echo()
 
     for i, s in enumerate(sentences, 1):
         vr = s.get("verification", {})
-        print(f"  [{i}] Tier {vr.get('tier','?')} ({vr.get('tier_label','?')}) — {s['text']}")
+        _echo(f"  [{i}] Tier {vr.get('tier','?')} ({vr.get('tier_label','?')}) — {s['text']}")
         for c in s.get("citations", []):
-            print(f"       cite: \"{c['exact_source_quote'][:80]}\"")
-            print(f"       from: {c['chunk_id']}")
+            _echo(f"       cite: \"{c['exact_source_quote'][:80]}\"")
+            _echo(f"       from: {c['chunk_id']}")
 
     # ── Debug info ────────────────────────────────────────────────────────────
     if debug and result.get("debug"):
         dbg = result["debug"]
         stats = dbg.get("pipeline_stats", {})
-        print(f"\n  Pipeline stats: {stats}")
-        print(f"\n  Audit trail ({len(dbg.get('audit_trail', []))} events):")
+        _echo(f"\n  Pipeline stats: {stats}")
+        _echo(f"\n  Audit trail ({len(dbg.get('audit_trail', []))} events):")
         for event in dbg.get("audit_trail", []):
             payload_str = json.dumps(event.get("payload", {}))
             if len(payload_str) > 120:
                 payload_str = payload_str[:120] + "…"
-            print(f"    [{event['node']}] {event['event_type']}: {payload_str}")
+            _echo(f"    [{event['node']}] {event['event_type']}: {payload_str}")
 
 
 def clean() -> None:
@@ -156,7 +162,7 @@ def clean() -> None:
         shutil.rmtree(name, ignore_errors=True)
     for p in pathlib.Path(".").rglob("__pycache__"):
         shutil.rmtree(p, ignore_errors=True)
-    print("Cleaned.")
+    _echo("Cleaned.")
 
 
 # ---------------------------------------------------------------------------
@@ -171,10 +177,10 @@ _TASKS = {
 
 
 def _help() -> None:
-    print(__doc__)
-    print("Available tasks:")
+    _echo(__doc__ or "")
+    _echo("Available tasks:")
     for name, fn in _TASKS.items():
-        print(f"  {name:<10} {fn.__doc__}")
+        _echo(f"  {name:<10} {fn.__doc__}")
 
 
 if __name__ == "__main__":
@@ -184,5 +190,5 @@ if __name__ == "__main__":
     else:
         _help()
         if task is not None:
-            print(f"\nUnknown task: {task!r}")
+            _echo(f"\nUnknown task: {task!r}")
             sys.exit(1)

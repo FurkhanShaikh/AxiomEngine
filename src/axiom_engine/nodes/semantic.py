@@ -2,30 +2,17 @@
 Axiom Engine v2.3 — Semantic Verifier Node (Module 7, Stage 2)
 
 Responsibilities:
-  - Runs AFTER Mechanical Verification has already passed for a citation.
-  - Takes the claim text, the exact_source_quote, AND the full chunk_text
-    (v2.3 context-deprivation patch — prevents context-stripping detection gaps).
-  - Calls a lightweight LLM via LiteLLM to assess faithful representation.
-  - Assigns Verification Tiers 1, 2, 3, 4, or 6 (Tier 5 is Mechanical's domain).
-  - Is configurable — can be disabled in pipeline_config. When disabled,
-    all mechanically-passed citations are upgraded/held at Tier 3 with a
-    warning (Category 2 degradation, architecture §7).
-  - Updates GraphState keys: final_sentences, rewrite_requests, loop_count,
-    audit_trail.
-
-Tier assignment logic (architecture §4):
-  Tier 1 — Authoritative: mechanically + semantically verified vs. an
-            authoritative/official source.
-  Tier 2 — Consensus: mechanically + semantically verified vs. multiple
-            independent agreeing sources.
-  Tier 3 — Model Assisted: mechanically verified; semantic verifier had to
-            rely on model training knowledge (no external source available),
-            OR semantic verification is disabled.
-  Tier 4 — Misrepresented: mechanically verified (quote exists) but semantic
-            check found the claim distorts or strips context from the quote.
-            Triggers a Synthesizer rewrite request.
-  Tier 6 — Conflicted: mechanically + semantically verified but multiple
-            sources contradict each other without explanation.
+  - Runs only after Mechanical Verification has checked every citation.
+  - Uses a lightweight LLM to decide whether each mechanically-valid claim
+    faithfully represents its cited source chunk in context.
+  - Emits citation-level verification objects and sentence-level rollups.
+  - Assigns Tier 1 and Tier 2 only from deterministic source signals:
+      * Tier 1: at least one authoritative source and no verification failures.
+      * Tier 2: multiple independent domains and no verification failures.
+      * Tier 3: mechanically valid but authority/consensus not proven.
+      * Tier 4: semantic misrepresentation.
+      * Tier 5: mechanical failure or unsupported uncited sentence.
+  - Never guesses Tier 6 without explicit contradiction logic.
 """
 
 from __future__ import annotations
@@ -37,7 +24,7 @@ import re
 import threading
 import time
 from functools import partial
-from typing import Any, Literal, cast
+from typing import Any
 
 import litellm
 
@@ -46,7 +33,9 @@ from axiom_engine.models import (
     Citation,
     FinalSentence,
     VerificationResult,
+    VerifiedCitation,
 )
+from axiom_engine.nodes.scorer import build_domain_sets, is_authoritative_domain
 from axiom_engine.state import GraphState
 from axiom_engine.utils.audit import make_audit_event
 from axiom_engine.utils.llm import build_completion_kwargs
@@ -57,26 +46,6 @@ _audit = partial(make_audit_event, "semantic_verifier")
 _MAX_CONCURRENT = int(os.environ.get("AXIOM_MAX_CONCURRENT_LLM", "5"))
 _llm_semaphore = threading.Semaphore(_MAX_CONCURRENT)
 
-# ---------------------------------------------------------------------------
-# Tier label lookup
-# ---------------------------------------------------------------------------
-
-# Higher value = more severe degradation. Used to track the worst citation per sentence.
-# Tier 4 (Misrepresented) is the most severe semantic outcome; 6 (Conflicted) next.
-_DEGRADATION_ORDER: dict[int, int] = {0: 0, 1: 1, 2: 2, 3: 3, 6: 4, 4: 5}
-
-_TIER_LABELS: dict[int, str] = {
-    1: "authoritative",
-    2: "consensus",
-    3: "model_assisted",
-    4: "misrepresented",
-    5: "hallucinated",  # assigned by Mechanical, never by Semantic
-    6: "conflicted",
-}
-
-# ---------------------------------------------------------------------------
-# Prompt templates
-# ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = """\
 You are the Semantic Verifier for the Axiom Engine. Your job is to assess \
@@ -90,33 +59,19 @@ You will be given:
 You must respond with a single valid JSON object (no markdown fences):
 
 {
-  "tier": <integer: 1, 2, 3, 4, or 6>,
   "semantic_check": "passed" | "failed",
   "failure_reason": "<string if failed, else null>",
   "reasoning": "<one sentence explaining your decision>"
 }
 
-TIER ASSIGNMENT RULES:
-  1 (Authoritative): The claim faithfully represents the quote, and the chunk \
-originates from an official, authoritative, or primary source.
-  2 (Consensus): The claim faithfully represents the quote, and the content \
-is consistent with multiple independent sources (cross-source agreement).
-  3 (Model Assisted): The claim faithfully represents the quote but you cannot \
-confirm the source authority or cross-source agreement from the chunk alone. \
-Use this as the default when the claim is accurate but source authority is unclear.
-  4 (Misrepresented): The quote exists in the chunk (mechanical check already \
-confirmed this) BUT the claim distorts, overstates, cherry-picks, or strips \
-critical context from the quote. Set semantic_check="failed".
-  6 (Conflicted): The claim and quote are faithful to this chunk, but the \
-chunk itself signals an unresolved contradiction with other sources.
-
-IMPORTANT:
-- Never assign Tier 5 — that is the Mechanical Verifier's domain.
-- If the claim accurately reflects the quote in context, default to Tier 3 \
-rather than guessing authority (Tier 1) or consensus (Tier 2).
-- Tier 4 requires a specific failure_reason explaining what context was stripped \
-or distorted.
-- Do NOT wrap your JSON in markdown code fences.
+RULES:
+  - Return semantic_check="passed" only when the claim faithfully represents
+    the quoted text in the context of the full chunk.
+  - Return semantic_check="failed" when the claim overstates, cherry-picks,
+    strips critical context, or otherwise distorts what the chunk says.
+  - failure_reason must be specific when semantic_check="failed".
+  - Do not infer source authority, consensus, or contradiction tiers.
+  - Do NOT wrap your JSON in markdown code fences.
 """
 
 _USER_PROMPT_TEMPLATE = """\
@@ -142,9 +97,7 @@ def _parse_semantic_response(raw: str) -> dict[str, Any]:
     Strips accidental markdown fences.
     Raises ValueError on parse or schema errors.
     """
-    # Strip <think>...</think> blocks (common in Qwen-family models).
     clean = re.sub(r"<think>.*?</think>", "", raw.strip(), flags=re.DOTALL)
-    # Strip markdown fences.
     clean = re.sub(r"^```(?:json)?\s*", "", clean.strip(), flags=re.IGNORECASE)
     clean = re.sub(r"\s*```$", "", clean.strip())
 
@@ -153,67 +106,181 @@ def _parse_semantic_response(raw: str) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"Semantic verifier response is not valid JSON: {exc}") from exc
 
-    tier = data.get("tier")
-    if tier not in (1, 2, 3, 4, 6):
-        raise ValueError(
-            f"Semantic verifier returned invalid tier={tier!r}. Must be 1, 2, 3, 4, or 6."
-        )
+    if "tier" in data:
+        raise ValueError("Semantic verifier response must not include a tier field")
+
     if data.get("semantic_check") not in ("passed", "failed"):
         raise ValueError(
             f"semantic_check must be 'passed' or 'failed', got {data.get('semantic_check')!r}"
         )
+
+    failure_reason = data.get("failure_reason")
+    if data["semantic_check"] == "failed" and not failure_reason:
+        raise ValueError("failure_reason is required when semantic_check='failed'")
+
     return data
 
 
-def _build_rewrite_request(
+def _build_tier4_rewrite_request(
     sentence_id: str,
     citation_id: str,
     chunk_id: str,
-    tier: int,
     failure_reason: str,
 ) -> str:
-    label = _TIER_LABELS[tier]
     return (
         f"Sentence {sentence_id}, citation {citation_id} (chunk {chunk_id}): "
-        f"Tier {tier} ({label}) failure — {failure_reason}"
+        f"Tier 4 (misrepresented) failure — {failure_reason}"
     )
 
 
-def _degraded_verification(citation_id: str, chunk_id: str) -> VerificationResult:
+def _build_uncited_sentence_request(sentence_id: str) -> str:
+    return (
+        f"Sentence {sentence_id}: unsupported sentence — every answer sentence "
+        "must include at least one citation with an exact source quote."
+    )
+
+
+def _degraded_verification(reason: str) -> VerificationResult:
     """Tier 3 fallback used when semantic verification is disabled or errors."""
     return VerificationResult(
         tier=3,
         tier_label="model_assisted",
         mechanical_check="passed",
         semantic_check="skipped",
-        failure_reason="Semantic verification disabled or unavailable; degraded to Tier 3.",
+        failure_reason=reason,
     )
 
 
-# ---------------------------------------------------------------------------
-# Per-citation semantic check
-# ---------------------------------------------------------------------------
+def _passed_verification(domain: str, authoritative: set[str]) -> VerificationResult:
+    """Build the citation-level verification for a semantically faithful citation."""
+    if is_authoritative_domain(domain, authoritative):
+        return VerificationResult(
+            tier=1,
+            tier_label="authoritative",
+            mechanical_check="passed",
+            semantic_check="passed",
+            failure_reason=None,
+        )
+    return VerificationResult(
+        tier=3,
+        tier_label="model_assisted",
+        mechanical_check="passed",
+        semantic_check="passed",
+        failure_reason=None,
+    )
 
 
+def _failed_semantic_verification(failure_reason: str) -> VerificationResult:
+    """Build the citation-level verification for a semantic misrepresentation."""
+    return VerificationResult(
+        tier=4,
+        tier_label="misrepresented",
+        mechanical_check="passed",
+        semantic_check="failed",
+        failure_reason=failure_reason,
+    )
+
+
+def _aggregate_sentence_verification(
+    verified_citations: list[VerifiedCitation],
+    chunk_lookup: dict[str, dict[str, Any]],
+    authoritative_domains: set[str],
+) -> VerificationResult:
+    """Roll citation outcomes up into a sentence-level tier."""
+    if not verified_citations:
+        return VerificationResult(
+            tier=5,
+            tier_label="hallucinated",
+            mechanical_check="failed",
+            semantic_check="skipped",
+            failure_reason="Sentence has no verified citations.",
+        )
+
+    citation_results = [citation.verification for citation in verified_citations]
+
+    if any(result.tier == 5 for result in citation_results):
+        failure = next(
+            (result.failure_reason for result in citation_results if result.tier == 5),
+            "At least one citation failed mechanical verification.",
+        )
+        return VerificationResult(
+            tier=5,
+            tier_label="hallucinated",
+            mechanical_check="failed",
+            semantic_check="skipped",
+            failure_reason=failure,
+        )
+
+    if any(result.tier == 4 for result in citation_results):
+        failure = next(
+            (result.failure_reason for result in citation_results if result.tier == 4),
+            "At least one citation misrepresents its source.",
+        )
+        return VerificationResult(
+            tier=4,
+            tier_label="misrepresented",
+            mechanical_check="passed",
+            semantic_check="failed",
+            failure_reason=failure,
+        )
+
+    all_semantic_passed = all(result.semantic_check == "passed" for result in citation_results)
+    citation_domains = {
+        str(chunk_lookup.get(citation.chunk_id, {}).get("domain", ""))
+        for citation in verified_citations
+        if chunk_lookup.get(citation.chunk_id, {}).get("domain")
+    }
+    authoritative_hit = any(
+        is_authoritative_domain(domain, authoritative_domains) for domain in citation_domains
+    )
+
+    if all_semantic_passed and authoritative_hit:
+        return VerificationResult(
+            tier=1,
+            tier_label="authoritative",
+            mechanical_check="passed",
+            semantic_check="passed",
+            failure_reason=None,
+        )
+
+    if all_semantic_passed and len(citation_domains) >= 2:
+        return VerificationResult(
+            tier=2,
+            tier_label="consensus",
+            mechanical_check="passed",
+            semantic_check="passed",
+            failure_reason=None,
+        )
+
+    fallback_reason = next(
+        (result.failure_reason for result in citation_results if result.failure_reason),
+        None,
+    )
+    return VerificationResult(
+        tier=3,
+        tier_label="model_assisted",
+        mechanical_check="passed",
+        semantic_check="passed" if all_semantic_passed else "skipped",
+        failure_reason=fallback_reason,
+    )
 def _verify_citation(
     claim_text: str,
-    citation: dict[str, Any],
+    citation: Citation,
     chunk_lookup: dict[str, dict[str, Any]],
     model: str,
-) -> tuple[VerificationResult, dict[str, Any] | None]:
+    authoritative: set[str],
+) -> tuple[VerificationResult, str | None]:
     """
     Run semantic verification on one citation.
 
     Returns:
-        (VerificationResult, rewrite_dict | None)
-        rewrite_dict is non-None only for Tier 4 failures.
+        (VerificationResult, rewrite_request_or_None)
     """
-    chunk_id: str = citation["chunk_id"]
-    exact_quote: str = citation["exact_source_quote"]
-
+    chunk_id = citation.chunk_id
     chunk_data = chunk_lookup.get(chunk_id, {})
-    chunk_text: str = chunk_data.get("text", "")
-    source_metadata: str = json.dumps(
+    domain = str(chunk_data.get("domain", ""))
+    chunk_text = str(chunk_data.get("text", ""))
+    source_metadata = json.dumps(
         {k: v for k, v in chunk_data.items() if k not in ("text", "chunk_id")},
         indent=2,
     )
@@ -224,7 +291,7 @@ def _verify_citation(
             "role": "user",
             "content": _USER_PROMPT_TEMPLATE.format(
                 claim=claim_text,
-                quote=exact_quote,
+                quote=citation.exact_source_quote,
                 chunk_text=chunk_text or "(chunk text unavailable)",
                 source_metadata=source_metadata or "{}",
             ),
@@ -246,72 +313,35 @@ def _verify_citation(
             with _llm_semaphore:
                 response = litellm.completion(**completion_kwargs)
             LLM_CALL_DURATION.labels(node="semantic", model=model).observe(time.monotonic() - start)
-        raw: str = response.choices[0].message.content or ""
+        raw = response.choices[0].message.content or ""
         data = _parse_semantic_response(raw)
     except Exception as exc:
-        # Category 2 degradation: semantic verifier failure → Tier 3 + warning.
         logger.warning(
             "Semantic verification failed for chunk %s, degrading to Tier 3: %s",
             chunk_id,
             exc,
         )
         return (
-            VerificationResult(
-                tier=3,
-                tier_label="model_assisted",
-                mechanical_check="passed",
-                semantic_check="skipped",
-                failure_reason=f"Semantic verifier error (degraded to Tier 3): {exc}",
+            _degraded_verification(
+                f"Semantic verifier error (degraded to deterministic fallback): {exc}",
             ),
             None,
         )
 
-    tier = cast(Literal[1, 2, 3, 4, 6], data["tier"])
-    semantic_check = cast(Literal["passed", "failed"], data["semantic_check"])
-    failure_reason: str | None = data.get("failure_reason")
+    if data["semantic_check"] == "failed":
+        failure_reason = str(data["failure_reason"])
+        return _failed_semantic_verification(failure_reason), failure_reason
 
-    vr = VerificationResult(
-        tier=tier,
-        tier_label=cast(
-            Literal[
-                "authoritative",
-                "consensus",
-                "model_assisted",
-                "misrepresented",
-                "hallucinated",
-                "conflicted",
-            ],
-            _TIER_LABELS[tier],
-        ),
-        mechanical_check="passed",  # Semantic only runs after mechanical pass
-        semantic_check=semantic_check,
-        failure_reason=failure_reason,
-    )
-
-    rewrite: dict[str, Any] | None = None
-    if tier == 4:
-        rewrite = {
-            "citation_id": citation["citation_id"],
-            "chunk_id": chunk_id,
-            "tier": 4,
-            "failure_reason": failure_reason or "Context misrepresented.",
-        }
-
-    return vr, rewrite
-
-
-# ---------------------------------------------------------------------------
-# Node
-# ---------------------------------------------------------------------------
+    return _passed_verification(domain, authoritative), None
 
 
 def semantic_verifier_node(state: GraphState) -> dict[str, Any]:
     """
     LangGraph node — Semantic Verifier (Stage 2).
 
-    Iterates over draft_sentences from state. For each citation that already
-    has a mechanical 'passed' status (determined by the caller via
-    mechanical_results in state), runs the lightweight LLM semantic check.
+    Iterates over draft_sentences from state. For each mechanically-valid citation,
+    runs the lightweight semantic check. Citation-level results are rolled up into
+    a sentence-level verification summary.
 
     Returns keys: final_sentences, rewrite_requests, loop_count, audit_trail
     """
@@ -325,13 +355,10 @@ def semantic_verifier_node(state: GraphState) -> dict[str, Any]:
     model: str = models_cfg.get("verifier", "gpt-4o-mini")
 
     draft_sentences: list[dict] = list(state.get("draft_sentences") or [])
-
-    # Build chunk lookup: chunk_id → chunk dict (text + metadata)
     indexed_chunks: list[dict] = list(state.get("indexed_chunks") or [])
-    chunk_lookup: dict[str, dict] = {c["chunk_id"]: c for c in indexed_chunks}
-
-    # mechanical_results: dict[citation_id, "passed"|"failed"] — set by verifier node
-    mechanical_results: dict[str, str] = cast(dict[str, str], state.get("mechanical_results") or {})
+    chunk_lookup: dict[str, dict[str, Any]] = {chunk["chunk_id"]: chunk for chunk in indexed_chunks}
+    mechanical_results: dict[str, dict[str, Any]] = state.get("mechanical_results") or {}
+    authoritative_domains, _ = build_domain_sets(state.get("app_config") or {})
 
     audit.append(
         _audit(
@@ -349,101 +376,134 @@ def semantic_verifier_node(state: GraphState) -> dict[str, Any]:
     rewrite_requests: list[str] = []
 
     for sentence_dict in draft_sentences:
-        sentence_id: str = sentence_dict["sentence_id"]
-        claim_text: str = sentence_dict["text"]
-        citations: list[dict] = sentence_dict.get("citations") or []
-
-        # Sentence-level verification result: use the worst citation tier.
-        sentence_verification: VerificationResult | None = None
+        sentence_id = sentence_dict["sentence_id"]
+        claim_text = sentence_dict["text"]
+        citations = [Citation(**citation) for citation in sentence_dict.get("citations") or []]
 
         if not sentence_dict.get("is_cited") or not citations:
-            # Uncited sentence — no verification needed.
+            rewrite_requests.append(_build_uncited_sentence_request(sentence_id))
             sentence_verification = VerificationResult(
-                tier=3,
-                tier_label="model_assisted",
-                mechanical_check="skipped",
+                tier=5,
+                tier_label="hallucinated",
+                mechanical_check="failed",
                 semantic_check="skipped",
-                failure_reason=None,
+                failure_reason="Sentence is unsupported because it has no citations.",
             )
-        else:
-            worst_tier: int = 0  # 0 = sentinel (no citation processed yet)
-            worst_vr: VerificationResult | None = None
+            final_sentences.append(
+                FinalSentence(
+                    sentence_id=sentence_id,
+                    text=claim_text,
+                    is_cited=False,
+                    citations=[],
+                    verification=sentence_verification,
+                ).model_dump()
+            )
+            audit.append(
+                _audit(
+                    "semantic_unsupported_sentence",
+                    {"sentence_id": sentence_id, "reason": sentence_verification.failure_reason},
+                )
+            )
+            continue
 
-            for citation in citations:
-                cit_id: str = citation["citation_id"]
-                chunk_id: str = citation["chunk_id"]
+        verified_citations: list[VerifiedCitation] = []
 
-                # Skip citations that failed mechanical verification —
-                # the verification_node handles those as Tier 5 rewrite requests.
-                if mechanical_results.get(cit_id) == "failed":
-                    audit.append(
-                        _audit(
-                            "semantic_skip_mechanical_fail",
-                            {"citation_id": cit_id, "chunk_id": chunk_id},
-                        )
+        for citation in citations:
+            mechanical_payload = mechanical_results.get(citation.citation_id)
+            if mechanical_payload is None:
+                vr = VerificationResult(
+                    tier=5,
+                    tier_label="hallucinated",
+                    mechanical_check="failed",
+                    semantic_check="skipped",
+                    failure_reason="Citation was not processed by the mechanical verifier.",
+                )
+            elif isinstance(mechanical_payload, str):
+                if mechanical_payload == "passed":
+                    vr = VerificationResult(
+                        tier=3,
+                        tier_label="model_assisted",
+                        mechanical_check="passed",
+                        semantic_check="skipped",
+                        failure_reason=None,
                     )
-                    continue
+                else:
+                    vr = VerificationResult(
+                        tier=5,
+                        tier_label="hallucinated",
+                        mechanical_check="failed",
+                        semantic_check="skipped",
+                        failure_reason="Citation failed mechanical verification.",
+                    )
+            else:
+                vr = VerificationResult.model_validate(mechanical_payload)
 
+            if vr.mechanical_check == "passed":
                 if not semantic_enabled:
-                    vr = _degraded_verification(cit_id, chunk_id)
+                    vr = _degraded_verification(
+                        "Semantic verification disabled; deterministic fallback applied.",
+                    )
                     audit.append(
                         _audit(
                             "semantic_skipped_disabled",
-                            {"citation_id": cit_id, "chunk_id": chunk_id, "tier": 3},
+                            {"citation_id": citation.citation_id, "chunk_id": citation.chunk_id},
                         )
                     )
                 else:
-                    vr, rewrite = _verify_citation(
+                    vr, rewrite_reason = _verify_citation(
                         claim_text=claim_text,
                         citation=citation,
                         chunk_lookup=chunk_lookup,
                         model=model,
+                        authoritative=authoritative_domains,
                     )
-                    if rewrite is not None:
+                    if rewrite_reason is not None:
                         rewrite_requests.append(
-                            _build_rewrite_request(
+                            _build_tier4_rewrite_request(
                                 sentence_id=sentence_id,
-                                citation_id=cit_id,
-                                chunk_id=chunk_id,
-                                tier=4,
-                                failure_reason=rewrite["failure_reason"],
+                                citation_id=citation.citation_id,
+                                chunk_id=citation.chunk_id,
+                                failure_reason=rewrite_reason,
                             )
                         )
-                    audit.append(
-                        _audit(
-                            "semantic_citation_result",
-                            {
-                                "citation_id": cit_id,
-                                "chunk_id": chunk_id,
-                                "tier": vr.tier,
-                                "semantic_check": vr.semantic_check,
-                                "failure_reason": vr.failure_reason,
-                            },
-                        )
-                    )
 
-                # Track worst (highest degradation priority) citation tier.
-                if _DEGRADATION_ORDER.get(vr.tier, 0) > _DEGRADATION_ORDER.get(worst_tier, 0):
-                    worst_tier = vr.tier
-                    worst_vr = vr
+            verified_citation = VerifiedCitation(
+                citation_id=citation.citation_id,
+                chunk_id=citation.chunk_id,
+                exact_source_quote=citation.exact_source_quote,
+                verification=vr,
+            )
+            verified_citations.append(verified_citation)
 
-            sentence_verification = worst_vr or VerificationResult(
-                tier=3,
-                tier_label="model_assisted",
-                mechanical_check="passed",
-                semantic_check="skipped",
-                failure_reason="No mechanically-passed citations to semantically verify.",
+            audit.append(
+                _audit(
+                    "semantic_citation_result",
+                    {
+                        "citation_id": citation.citation_id,
+                        "chunk_id": citation.chunk_id,
+                        "tier": vr.tier,
+                        "mechanical_check": vr.mechanical_check,
+                        "semantic_check": vr.semantic_check,
+                        "failure_reason": vr.failure_reason,
+                    },
+                )
             )
 
-        # Build FinalSentence dict
-        final_sentence = FinalSentence(
-            sentence_id=sentence_dict["sentence_id"],
-            text=sentence_dict["text"],
-            is_cited=sentence_dict.get("is_cited", False),
-            citations=[Citation(**c) for c in citations],
-            verification=sentence_verification,
+        sentence_verification = _aggregate_sentence_verification(
+            verified_citations,
+            chunk_lookup,
+            authoritative_domains,
         )
-        final_sentences.append(final_sentence.model_dump())
+
+        final_sentences.append(
+            FinalSentence(
+                sentence_id=sentence_id,
+                text=claim_text,
+                is_cited=True,
+                citations=verified_citations,
+                verification=sentence_verification,
+            ).model_dump()
+        )
 
     audit.append(
         _audit(
@@ -457,7 +517,7 @@ def semantic_verifier_node(state: GraphState) -> dict[str, Any]:
 
     return {
         "final_sentences": final_sentences,
-        "rewrite_requests": rewrite_requests,  # operator.add appends
+        "rewrite_requests": rewrite_requests,
         "loop_count": state.get("loop_count", 0) + 1,
         "audit_trail": audit,
     }

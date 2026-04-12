@@ -12,6 +12,7 @@ Test categories:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections import deque
 from typing import Any
@@ -29,6 +30,7 @@ from axiom_engine.main import (
     marshal_response,
 )
 from axiom_engine.models import AxiomResponse
+from axiom_engine.nodes.retriever import MockSearchBackend, set_search_backend
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -120,7 +122,16 @@ _SAMPLE_CHUNKS = [
             "Solid-state batteries replace liquid electrolytes with solid ceramics. "
             "This substitution significantly improves thermal stability and energy density."
         ),
+        "domain": "science.org",
     },
+]
+
+_SEARCH_RESULTS = [
+    {
+        "url": "https://science.org/article",
+        "content": _SAMPLE_CHUNKS[0]["text"],
+        "title": "Solid-State Battery Review",
+    }
 ]
 
 
@@ -130,6 +141,9 @@ def client(monkeypatch):
     _main_module._response_cache.clear()
     # Remove TAVILY_API_KEY so the lifespan uses MockSearchBackend, not real Tavily.
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.setenv("AXIOM_ENV", "test")
+    monkeypatch.delenv("AXIOM_API_KEYS", raising=False)
+    set_search_backend(MockSearchBackend([]))
     with TestClient(app) as c:
         yield c
 
@@ -216,9 +230,8 @@ class TestDetermineStatus:
         sentences = [_make_final_sentence_dict(tier=6)]
         assert determine_status(True, sentences) == "partial"
 
-    def test_success_empty_sentences(self) -> None:
-        """Answerable with no sentences should still be success."""
-        assert determine_status(True, []) == "success"
+    def test_empty_sentences_are_partial(self) -> None:
+        assert determine_status(True, []) == "partial"
 
 
 # ===========================================================================
@@ -309,24 +322,15 @@ class TestEndpoint:
         )
         semantic_json = json.dumps(
             {
-                "tier": 1,
                 "semantic_check": "passed",
                 "failure_reason": None,
                 "reasoning": "Faithfully represents the source.",
             }
         )
         mock_llm.side_effect = _make_model_router([synth_json], [semantic_json])
+        set_search_backend(MockSearchBackend(_SEARCH_RESULTS))
 
-        # Inject chunks directly into initial_state via monkeypatching.
-        from axiom_engine.state import make_initial_state as original_make
-
-        def patched_make(*args: Any, **kwargs: Any) -> Any:
-            state = original_make(*args, **kwargs)
-            state["indexed_chunks"] = _SAMPLE_CHUNKS
-            return state
-
-        with patch("axiom_engine.main.make_initial_state", new=patched_make):
-            resp = client.post("/v1/synthesize", json=_VALID_REQUEST)
+        resp = client.post("/v1/synthesize", json=_VALID_REQUEST)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -346,17 +350,8 @@ class TestEndpoint:
             }
         )
         mock_llm.side_effect = _make_model_router([unanswerable_json], [])
-
-        with patch("axiom_engine.main.make_initial_state") as mock_make:
-            from axiom_engine.state import make_initial_state as real_make
-
-            def patched(*a: Any, **kw: Any) -> Any:
-                s = real_make(*a, **kw)
-                s["indexed_chunks"] = _SAMPLE_CHUNKS
-                return s
-
-            mock_make.side_effect = patched
-            resp = client.post("/v1/synthesize", json=_VALID_REQUEST)
+        set_search_backend(MockSearchBackend(_SEARCH_RESULTS))
+        resp = client.post("/v1/synthesize", json=_VALID_REQUEST)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -368,17 +363,8 @@ class TestEndpoint:
         with patch("litellm.completion") as mock_llm:
             synth_json = json.dumps({"is_answerable": False, "sentences": []})
             mock_llm.side_effect = _make_model_router([synth_json], [])
-
-            with patch("axiom_engine.main.make_initial_state") as mock_make:
-                from axiom_engine.state import make_initial_state as real_make
-
-                def patched(*a: Any, **kw: Any) -> Any:
-                    s = real_make(*a, **kw)
-                    s["indexed_chunks"] = _SAMPLE_CHUNKS
-                    return s
-
-                mock_make.side_effect = patched
-                resp = client.post("/v1/synthesize", json=_VALID_REQUEST)
+            set_search_backend(MockSearchBackend(_SEARCH_RESULTS))
+            resp = client.post("/v1/synthesize", json=_VALID_REQUEST)
 
         data = resp.json()
         parsed = AxiomResponse.model_validate(data)
@@ -464,6 +450,22 @@ class TestValidationErrors:
         assert resp.status_code == 200
         assert resp.json()["request_id"] == "req_min"
 
+    def test_app_config_accepts_domain_overrides(self, client: TestClient) -> None:
+        payload = {
+            "request_id": "req_cfg",
+            "user_query": "What is a battery?",
+            "app_config": {
+                "expertise_level": "expert",
+                "banned_domains": ["spam.com"],
+                "authoritative_domains": ["internal.example.com"],
+                "low_quality_domains": ["blogs.example.com"],
+            },
+        }
+        with patch.object(app.state, "engine", create=True) as mock_engine:
+            mock_engine.invoke.return_value = {"is_answerable": False, "final_sentences": []}
+            resp = client.post("/v1/synthesize", json=payload)
+        assert resp.status_code == 200
+
 
 # ===========================================================================
 # G. Health endpoint
@@ -475,3 +477,64 @@ class TestHealthEndpoint:
         resp = client.get("/health")
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
+
+
+class TestCacheIsolation:
+    def test_cached_response_uses_current_request_id(self, client: TestClient) -> None:
+        graph_result = {
+            "is_answerable": True,
+            "final_sentences": [_make_final_sentence_dict(tier=1)],
+        }
+        with patch.object(app.state, "engine", create=True) as mock_engine:
+            mock_engine.invoke.return_value = graph_result
+            first = client.post("/v1/synthesize", json={**_VALID_REQUEST, "request_id": "req_a"})
+            second = client.post("/v1/synthesize", json={**_VALID_REQUEST, "request_id": "req_b"})
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["request_id"] == "req_a"
+        assert second.json()["request_id"] == "req_b"
+        assert mock_engine.invoke.call_count == 1
+
+    def test_include_debug_isolated_from_non_debug_cache_entries(self, client: TestClient) -> None:
+        graph_result = {
+            "is_answerable": True,
+            "final_sentences": [_make_final_sentence_dict(tier=1)],
+            "audit_trail": [],
+            "indexed_chunks": _SAMPLE_CHUNKS,
+            "ranked_chunks": _SAMPLE_CHUNKS,
+        }
+        with patch.object(app.state, "engine", create=True) as mock_engine:
+            mock_engine.invoke.return_value = graph_result
+            no_debug = client.post("/v1/synthesize", json={**_VALID_REQUEST, "include_debug": False})
+            with_debug = client.post("/v1/synthesize", json={**_VALID_REQUEST, "include_debug": True})
+
+        assert no_debug.status_code == 200
+        assert with_debug.status_code == 200
+        assert no_debug.json()["debug"] is None
+        assert with_debug.json()["debug"] is not None
+        assert mock_engine.invoke.call_count == 2
+
+
+class TestAuthMode:
+    def test_verify_api_key_fails_closed_when_server_is_misconfigured(self, monkeypatch) -> None:
+        monkeypatch.setenv("AXIOM_ENV", "production")
+        monkeypatch.delenv("AXIOM_API_KEYS", raising=False)
+
+        async def _run() -> None:
+            with pytest.raises(_main_module.HTTPException) as exc_info:
+                await _main_module.verify_api_key(None)
+            assert exc_info.value.status_code == 503
+
+        asyncio.run(_run())
+
+    def test_lifespan_requires_api_keys_outside_dev(self, monkeypatch) -> None:
+        monkeypatch.setenv("AXIOM_ENV", "production")
+        monkeypatch.delenv("AXIOM_API_KEYS", raising=False)
+
+        async def _run() -> None:
+            async with _main_module.lifespan(app):
+                pass
+
+        with pytest.raises(RuntimeError, match="AXIOM_API_KEYS"):
+            asyncio.run(_run())

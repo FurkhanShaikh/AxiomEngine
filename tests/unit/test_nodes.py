@@ -99,6 +99,13 @@ _SAMPLE_CHUNKS = [
         "domain": "science.org",
         "is_authoritative": False,
     },
+    {
+        "chunk_id": "doc_3_chunk_C",
+        "text": "Independent reporting also confirms higher energy density in solid-state cells.",
+        "source_url": "https://example.net/article",
+        "domain": "example.net",
+        "is_authoritative": False,
+    },
 ]
 
 _VALID_SYNTHESIZER_JSON = json.dumps(
@@ -307,36 +314,42 @@ class TestSynthesizerParsing:
 
 
 # ===========================================================================
-# C. Semantic Verifier — tier assignment
+# C. Semantic Verifier — strict verification outcomes
 # ===========================================================================
 
 
+def _semantic_pass_json() -> str:
+    return json.dumps(
+        {
+            "semantic_check": "passed",
+            "failure_reason": None,
+            "reasoning": "Faithfully represents the cited source.",
+        }
+    )
+
+
+def _semantic_fail_json(reason: str) -> str:
+    return json.dumps(
+        {
+            "semantic_check": "failed",
+            "failure_reason": reason,
+            "reasoning": "The claim distorts the cited source.",
+        }
+    )
+
+
 class TestSemanticVerifierTierAssignment:
-    def _run(
-        self,
-        tier: int,
-        semantic_check: str = "passed",
-        failure_reason: str | None = None,
-        mechanical_results: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        llm_json = json.dumps(
-            {
-                "tier": tier,
-                "semantic_check": semantic_check,
-                "failure_reason": failure_reason,
-                "reasoning": "Test reasoning.",
-            }
-        )
+    def test_authoritative_sentence_gets_tier_1(self) -> None:
         draft = [
             {
                 "sentence_id": "s_01",
-                "text": "Solid-state batteries replace liquid electrolytes.",
+                "text": "Multiple studies confirm higher energy density in solid-state designs.",
                 "is_cited": True,
                 "citations": [
                     {
                         "citation_id": "cite_1",
-                        "chunk_id": "doc_1_chunk_A",
-                        "exact_source_quote": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
+                        "chunk_id": "doc_2_chunk_B",
+                        "exact_source_quote": "Multiple studies confirm higher energy density in solid-state designs.",
                     }
                 ],
             }
@@ -344,63 +357,57 @@ class TestSemanticVerifierTierAssignment:
         state = _make_state(
             indexed_chunks=_SAMPLE_CHUNKS,
             draft_sentences=draft,
-            mechanical_results=mechanical_results or {"cite_1": "passed"},
+            mechanical_results={"cite_1": "passed"},
         )
         with patch("axiom_engine.nodes.semantic.litellm.completion") as mock_comp:
-            mock_comp.return_value = _mock_litellm_response(llm_json)
-            return semantic_verifier_node(state)
+            mock_comp.return_value = _mock_litellm_response(_semantic_pass_json())
+            result = semantic_verifier_node(state)
 
-    def test_tier_1_authoritative(self) -> None:
-        result = self._run(1)
         vr = result["final_sentences"][0]["verification"]
         assert vr["tier"] == 1
         assert vr["tier_label"] == "authoritative"
-        assert vr["semantic_check"] == "passed"
 
-    def test_tier_2_consensus(self) -> None:
-        result = self._run(2)
+    def test_multi_source_sentence_gets_tier_2(self) -> None:
+        draft = [
+            {
+                "sentence_id": "s_01",
+                "text": "Independent sources report higher energy density in solid-state cells.",
+                "is_cited": True,
+                "citations": [
+                    {
+                        "citation_id": "cite_1",
+                        "chunk_id": "doc_1_chunk_A",
+                        "exact_source_quote": "This substitution significantly improves thermal stability and energy density.",
+                    },
+                    {
+                        "citation_id": "cite_2",
+                        "chunk_id": "doc_3_chunk_C",
+                        "exact_source_quote": "Independent reporting also confirms higher energy density in solid-state cells.",
+                    },
+                ],
+            }
+        ]
+        state = _make_state(
+            indexed_chunks=_SAMPLE_CHUNKS,
+            draft_sentences=draft,
+            mechanical_results={"cite_1": "passed", "cite_2": "passed"},
+        )
+        with patch("axiom_engine.nodes.semantic.litellm.completion") as mock_comp:
+            mock_comp.side_effect = [
+                _mock_litellm_response(_semantic_pass_json()),
+                _mock_litellm_response(_semantic_pass_json()),
+            ]
+            result = semantic_verifier_node(state)
+
         vr = result["final_sentences"][0]["verification"]
         assert vr["tier"] == 2
         assert vr["tier_label"] == "consensus"
 
-    def test_tier_3_model_assisted(self) -> None:
-        result = self._run(3)
-        vr = result["final_sentences"][0]["verification"]
-        assert vr["tier"] == 3
-        assert vr["tier_label"] == "model_assisted"
-
-    def test_tier_4_misrepresented_triggers_rewrite(self) -> None:
-        result = self._run(
-            4,
-            semantic_check="failed",
-            failure_reason="Claim overstates the temperature benefit.",
-        )
-        vr = result["final_sentences"][0]["verification"]
-        assert vr["tier"] == 4
-        assert vr["semantic_check"] == "failed"
-        assert len(result["rewrite_requests"]) == 1
-        assert "Tier 4" in result["rewrite_requests"][0]
-
-    def test_tier_6_conflicted(self) -> None:
-        result = self._run(6)
-        vr = result["final_sentences"][0]["verification"]
-        assert vr["tier"] == 6
-        assert vr["tier_label"] == "conflicted"
-
-    def test_tier_5_rejected_by_parser(self) -> None:
-        """Semantic verifier must never assign Tier 5 — that belongs to Mechanical."""
-        llm_json = json.dumps(
-            {
-                "tier": 5,
-                "semantic_check": "failed",
-                "failure_reason": "Quote not found.",
-                "reasoning": "Should not happen.",
-            }
-        )
+    def test_non_authoritative_single_source_gets_tier_3(self) -> None:
         draft = [
             {
                 "sentence_id": "s_01",
-                "text": "Some sentence.",
+                "text": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
                 "is_cited": True,
                 "citations": [
                     {
@@ -417,11 +424,43 @@ class TestSemanticVerifierTierAssignment:
             mechanical_results={"cite_1": "passed"},
         )
         with patch("axiom_engine.nodes.semantic.litellm.completion") as mock_comp:
-            mock_comp.return_value = _mock_litellm_response(llm_json)
+            mock_comp.return_value = _mock_litellm_response(_semantic_pass_json())
             result = semantic_verifier_node(state)
-        # Should degrade to Tier 3, not propagate Tier 5
+
         vr = result["final_sentences"][0]["verification"]
         assert vr["tier"] == 3
+        assert vr["tier_label"] == "model_assisted"
+
+    def test_misrepresented_citation_triggers_tier_4_and_rewrite(self) -> None:
+        draft = [
+            {
+                "sentence_id": "s_01",
+                "text": "Solid-state batteries have perfect thermal stability.",
+                "is_cited": True,
+                "citations": [
+                    {
+                        "citation_id": "cite_1",
+                        "chunk_id": "doc_1_chunk_A",
+                        "exact_source_quote": "This substitution significantly improves thermal stability and energy density.",
+                    }
+                ],
+            }
+        ]
+        state = _make_state(
+            indexed_chunks=_SAMPLE_CHUNKS,
+            draft_sentences=draft,
+            mechanical_results={"cite_1": "passed"},
+        )
+        with patch("axiom_engine.nodes.semantic.litellm.completion") as mock_comp:
+            mock_comp.return_value = _mock_litellm_response(
+                _semantic_fail_json("Claim overstates 'improves' as 'perfect'.")
+            )
+            result = semantic_verifier_node(state)
+
+        vr = result["final_sentences"][0]["verification"]
+        assert vr["tier"] == 4
+        assert len(result["rewrite_requests"]) == 1
+        assert "Tier 4" in result["rewrite_requests"][0]
 
 
 # ===========================================================================
@@ -430,18 +469,7 @@ class TestSemanticVerifierTierAssignment:
 
 
 class TestSemanticVerifierStateUpdates:
-    @patch("axiom_engine.nodes.semantic.litellm.completion")
-    def test_loop_count_incremented(self, mock_comp: MagicMock) -> None:
-        mock_comp.return_value = _mock_litellm_response(
-            json.dumps(
-                {
-                    "tier": 1,
-                    "semantic_check": "passed",
-                    "failure_reason": None,
-                    "reasoning": "ok",
-                }
-            )
-        )
+    def test_loop_count_incremented(self) -> None:
         draft = [
             {
                 "sentence_id": "s_01",
@@ -455,11 +483,11 @@ class TestSemanticVerifierStateUpdates:
         assert result["loop_count"] == 2
 
     @patch("axiom_engine.nodes.semantic.litellm.completion")
-    def test_uncited_sentence_gets_tier_3_skipped(self, mock_comp: MagicMock) -> None:
+    def test_uncited_sentence_gets_tier_5_and_rewrite(self, mock_comp: MagicMock) -> None:
         draft = [
             {
                 "sentence_id": "s_01",
-                "text": "This is a transition sentence.",
+                "text": "This is unsupported.",
                 "is_cited": False,
                 "citations": [],
             }
@@ -467,14 +495,13 @@ class TestSemanticVerifierStateUpdates:
         state = _make_state(draft_sentences=draft)
         result = semantic_verifier_node(state)
         vr = result["final_sentences"][0]["verification"]
-        assert vr["tier"] == 3
-        assert vr["mechanical_check"] == "skipped"
-        assert vr["semantic_check"] == "skipped"
+        assert vr["tier"] == 5
+        assert vr["mechanical_check"] == "failed"
+        assert result["rewrite_requests"]
         mock_comp.assert_not_called()
 
     @patch("axiom_engine.nodes.semantic.litellm.completion")
     def test_mechanical_failed_citation_skipped_by_semantic(self, mock_comp: MagicMock) -> None:
-        """Citations that failed mechanical check are skipped by semantic."""
         draft = [
             {
                 "sentence_id": "s_01",
@@ -494,60 +521,40 @@ class TestSemanticVerifierStateUpdates:
             draft_sentences=draft,
             mechanical_results={"cite_1": "failed"},
         )
-        semantic_verifier_node(state)
+        result = semantic_verifier_node(state)
         mock_comp.assert_not_called()
+        assert result["final_sentences"][0]["verification"]["tier"] == 5
 
     @patch("axiom_engine.nodes.semantic.litellm.completion")
-    def test_final_sentences_count_matches_draft(self, mock_comp: MagicMock) -> None:
-        mock_comp.return_value = _mock_litellm_response(
-            json.dumps(
-                {
-                    "tier": 2,
-                    "semantic_check": "passed",
-                    "failure_reason": None,
-                    "reasoning": "ok",
-                }
-            )
-        )
+    def test_final_sentences_include_citation_verification(self, mock_comp: MagicMock) -> None:
+        mock_comp.return_value = _mock_litellm_response(_semantic_pass_json())
         draft = [
             {
-                "sentence_id": f"s_0{i}",
-                "text": f"Sentence {i}.",
+                "sentence_id": "s_01",
+                "text": "Sentence 1.",
                 "is_cited": True,
                 "citations": [
                     {
-                        "citation_id": f"cite_{i}",
+                        "citation_id": "cite_1",
                         "chunk_id": "doc_1_chunk_A",
                         "exact_source_quote": "Solid-state batteries replace liquid electrolytes with solid ceramics.",
                     }
                 ],
             }
-            for i in range(1, 4)
         ]
         state = _make_state(
             indexed_chunks=_SAMPLE_CHUNKS,
             draft_sentences=draft,
-            mechanical_results={
-                "cite_1": "passed",
-                "cite_2": "passed",
-                "cite_3": "passed",
-            },
+            mechanical_results={"cite_1": "passed"},
         )
         result = semantic_verifier_node(state)
-        assert len(result["final_sentences"]) == 3
+        citation = result["final_sentences"][0]["citations"][0]
+        assert citation["verification"]["mechanical_check"] == "passed"
+        assert "verification" in citation
 
     @patch("axiom_engine.nodes.semantic.litellm.completion")
     def test_audit_trail_populated(self, mock_comp: MagicMock) -> None:
-        mock_comp.return_value = _mock_litellm_response(
-            json.dumps(
-                {
-                    "tier": 1,
-                    "semantic_check": "passed",
-                    "failure_reason": None,
-                    "reasoning": "ok",
-                }
-            )
-        )
+        mock_comp.return_value = _mock_litellm_response(_semantic_pass_json())
         draft = [
             {
                 "sentence_id": "s_01",
@@ -634,29 +641,16 @@ class TestSemanticVerifierDegradation:
         vr = result["final_sentences"][0]["verification"]
         assert vr["tier"] == 3
         assert vr["semantic_check"] == "skipped"
-        assert "degraded to Tier 3" in (vr["failure_reason"] or "")
+        assert "deterministic fallback" in (vr["failure_reason"] or "")
 
-    def test_parse_semantic_response_rejects_tier_5(self) -> None:
-        with pytest.raises(ValueError, match="invalid tier"):
+    def test_parse_semantic_response_rejects_tier_field(self) -> None:
+        with pytest.raises(ValueError, match="must not include a tier field"):
             _parse_semantic_response(
                 json.dumps(
                     {
                         "tier": 5,
                         "semantic_check": "failed",
-                        "failure_reason": None,
-                        "reasoning": "x",
-                    }
-                )
-            )
-
-    def test_parse_semantic_response_rejects_tier_7(self) -> None:
-        with pytest.raises(ValueError, match="invalid tier"):
-            _parse_semantic_response(
-                json.dumps(
-                    {
-                        "tier": 7,
-                        "semantic_check": "passed",
-                        "failure_reason": None,
+                        "failure_reason": "x",
                         "reasoning": "x",
                     }
                 )
@@ -667,8 +661,19 @@ class TestSemanticVerifierDegradation:
             _parse_semantic_response(
                 json.dumps(
                     {
-                        "tier": 1,
                         "semantic_check": "maybe",
+                        "failure_reason": None,
+                        "reasoning": "x",
+                    }
+                )
+            )
+
+    def test_parse_semantic_response_requires_failure_reason(self) -> None:
+        with pytest.raises(ValueError, match="failure_reason"):
+            _parse_semantic_response(
+                json.dumps(
+                    {
+                        "semantic_check": "failed",
                         "failure_reason": None,
                         "reasoning": "x",
                     }

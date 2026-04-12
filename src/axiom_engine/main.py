@@ -15,6 +15,7 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import importlib.metadata
 import json
@@ -83,22 +84,36 @@ limiter = Limiter(key_func=get_remote_address, default_limits=[_RATE_LIMIT])
 # API key authentication
 # ---------------------------------------------------------------------------
 
-# Comma-separated valid API keys.  When empty/unset, auth is disabled
-# (backward-compatible for local development).
-_API_KEYS: set[str] = set(
-    k.strip() for k in os.environ.get("AXIOM_API_KEYS", "").split(",") if k.strip()
-)
-
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+_NON_PROD_ENVS = {"development", "dev", "local", "test"}
+
+
+def _app_env() -> str:
+    """Return the current runtime environment."""
+    return os.environ.get("AXIOM_ENV", "development").strip().lower()
+
+
+def _api_keys() -> set[str]:
+    """Read valid API keys from the current environment."""
+    return {k.strip() for k in os.environ.get("AXIOM_API_KEYS", "").split(",") if k.strip()}
+
+
+def _auth_required() -> bool:
+    """Require auth outside explicitly non-production environments."""
+    return _app_env() not in _NON_PROD_ENVS
 
 
 async def verify_api_key(
     api_key: str | None = Security(_api_key_header),
 ) -> str | None:
     """Validate the API key if authentication is enabled."""
-    if not _API_KEYS:
-        return None  # Auth disabled — allow all requests.
-    if not api_key or api_key not in _API_KEYS:
+    valid_keys = _api_keys()
+    if not valid_keys:
+        if _auth_required():
+            raise HTTPException(status_code=503, detail="Server authentication is misconfigured.")
+        return None
+    if not api_key or api_key not in valid_keys:
         raise HTTPException(status_code=401, detail="Invalid or missing API key.")
     return api_key
 
@@ -109,35 +124,50 @@ async def verify_api_key(
 
 _CACHE_TTL_SECONDS: int = 300  # 5 minutes
 _CACHE_MAX_SIZE: int = 256  # max cached responses before LRU eviction
-_response_cache: TTLCache[str, AxiomResponse] = TTLCache(
+_response_cache: TTLCache[str, dict[str, Any]] = TTLCache(
     maxsize=_CACHE_MAX_SIZE, ttl=_CACHE_TTL_SECONDS
 )
 _cache_lock = threading.Lock()
 
 
 def _cache_key(payload: AxiomRequest) -> str:
-    """SHA-256 of the request fields that affect pipeline output."""
+    """SHA-256 of the request fields that shape the response body."""
     raw = json.dumps(
         {
             "query": payload.user_query,
             "models": payload.models.model_dump(),
             "pipeline": payload.pipeline_config.model_dump(),
             "app": payload.app_config.model_dump(),
+            "include_debug": payload.include_debug,
         },
         sort_keys=True,
     )
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def _get_cached(key: str) -> AxiomResponse | None:
+def _response_to_cache_value(response: AxiomResponse) -> dict[str, Any]:
+    """Serialize a response without request-scoped identifiers for safe reuse."""
+    data = response.model_dump()
+    data.pop("request_id", None)
+    return data
+
+
+def _hydrate_cached_response(request_id: str, cached: dict[str, Any]) -> AxiomResponse:
+    """Rebuild a response for the current request from cached template data."""
+    return AxiomResponse.model_validate({"request_id": request_id, **copy.deepcopy(cached)})
+
+
+def _get_cached(key: str, request_id: str) -> AxiomResponse | None:
     with _cache_lock:
-        result: AxiomResponse | None = _response_cache.get(key)
-        return result
+        cached = _response_cache.get(key)
+    if cached is None:
+        return None
+    return _hydrate_cached_response(request_id, cached)
 
 
 def _set_cached(key: str, response: AxiomResponse) -> None:
     with _cache_lock:
-        _response_cache[key] = response
+        _response_cache[key] = _response_to_cache_value(response)
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +235,9 @@ def determine_status(
     """
     if not is_answerable:
         return "unanswerable"
+
+    if not final_sentences:
+        return "partial"
 
     for s in final_sentences:
         tier = s.get("verification", {}).get("tier", 3)
@@ -299,6 +332,9 @@ def make_error_response(
 async def lifespan(app: FastAPI):
     """Compile the graph once at startup, attach to app state."""
     configure_logging()
+
+    if _auth_required() and not _api_keys():
+        raise RuntimeError("AXIOM_API_KEYS must be configured when AXIOM_ENV is not development.")
 
     # Wire search backend — Tavily if key present, else MockSearchBackend.
     tavily_key = os.environ.get("TAVILY_API_KEY")
@@ -418,10 +454,11 @@ async def synthesize(
 
     # Cache lookup — skip for error/unanswerable; only cache clean results.
     key = _cache_key(payload)
-    cached = _get_cached(key)
+    cached = _get_cached(key, payload.request_id)
     if cached is not None:
         CACHE_HITS.inc()
         logger.info("Cache hit for request %s", payload.request_id)
+        REQUESTS_BY_STATUS.labels(status=cached.status).inc()
         return cached
     CACHE_MISSES.inc()
 

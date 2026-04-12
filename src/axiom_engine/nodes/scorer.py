@@ -63,7 +63,7 @@ _DEFAULT_LOW_QUALITY_DOMAINS: set[str] = {
 _DEFAULT_SOURCE_SCORE = 0.5
 
 
-def _build_domain_sets(
+def build_domain_sets(
     app_config: dict[str, Any],
 ) -> tuple[set[str], set[str]]:
     """
@@ -78,6 +78,14 @@ def _build_domain_sets(
     low_quality = low_quality | _DEFAULT_LOW_QUALITY_DOMAINS
 
     return authoritative, low_quality
+
+
+def is_authoritative_domain(domain: str, authoritative: set[str]) -> bool:
+    """Return True when the domain is authoritative or a subdomain of one."""
+    domain_lower = domain.lower().strip()
+    if domain_lower in authoritative:
+        return True
+    return any(domain_lower.endswith("." + auth) for auth in authoritative)
 
 
 def score_source_quality(
@@ -182,7 +190,7 @@ def scorer_node(state: GraphState) -> dict[str, Any]:
     indexed_chunks: list[dict] = list(state.get("indexed_chunks") or [])
     app_cfg: dict = state.get("app_config") or {}
 
-    authoritative, low_quality = _build_domain_sets(app_cfg)
+    authoritative, low_quality = build_domain_sets(app_cfg)
 
     audit.append(
         _audit(

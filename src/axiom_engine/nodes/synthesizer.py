@@ -74,7 +74,7 @@ STRICT RULES:
 1. is_answerable ESCAPE HATCH: If the provided chunks do not contain \
 sufficient information to answer the query, you MUST set is_answerable=false \
 and return an empty sentences array. Do NOT fabricate an answer.
-2. Every sentence where is_cited=true MUST have at least one citation.
+2. Every answer sentence MUST set is_cited=true and include at least one citation.
 3. exact_source_quote MUST be a verbatim substring copied directly from the \
 chunk text. No paraphrasing, no summarising, no smart quotes. Copy the \
 characters exactly.
@@ -82,8 +82,7 @@ characters exactly.
 doc_<N>_chunk_<X>).
 5. sentence_id values must be sequential: s_01, s_02, s_03, ...
 6. citation_id values must be sequential: cite_1, cite_2, cite_3, ...
-7. Sentences that contain no factual claim (e.g. transition sentences) may \
-have is_cited=false and an empty citations array.
+7. Do not emit uncited transition sentences, summaries, or filler text.
 8. Do NOT wrap your response in markdown code fences.
 """
 
@@ -163,9 +162,21 @@ def _parse_llm_response(raw: str) -> SynthesizerOutput:
         raise ValueError(f"LLM response is not valid JSON: {exc}") from exc
 
     try:
-        return SynthesizerOutput.model_validate(data)
+        output = SynthesizerOutput.model_validate(data)
     except ValidationError as exc:
         raise ValueError(f"LLM JSON does not match SynthesizerOutput schema: {exc}") from exc
+
+    if output.is_answerable:
+        unsupported = [
+            sentence.sentence_id
+            for sentence in output.sentences
+            if not sentence.is_cited or not sentence.citations
+        ]
+        if unsupported:
+            joined = ", ".join(unsupported)
+            raise ValueError(f"Every answer sentence must be cited. Unsupported sentence_ids: {joined}")
+
+    return output
 
 
 # ---------------------------------------------------------------------------
