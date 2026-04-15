@@ -1,8 +1,8 @@
 """
 Axiom Engine v2.3 — LangGraph GraphState
-Uses typing.Annotated + operator.add for append-only list fields so that
-graph re-entry (override flow) incrementally appends new data rather than
-overwriting previously approved state.
+Uses typing.Annotated + operator.add only where append-only semantics are safe.
+Evidence and rewrite state are replaced on retry passes so stale data cannot
+pollute fresh retrieval attempts or leak obsolete rewrite instructions.
 """
 
 from __future__ import annotations
@@ -35,9 +35,11 @@ class GraphState(TypedDict):
     # RETRIEVAL STATE
     # ------------------------------------------------------------------
     search_queries: list[str]
-    # operator.add — source override re-entry appends new chunks without
-    # invalidating chunks that already passed quality scoring.
-    indexed_chunks: Annotated[Sequence[dict], operator.add]
+    indexed_chunks: list[dict]
+    # Monotonic doc counter so chunk IDs stay unique across retrieval retries.
+    next_doc_index: int
+    # Appended-to list of URLs across all retries to prevent duplicate fetching.
+    past_seen_urls: Annotated[Sequence[str], operator.add]
 
     # ------------------------------------------------------------------
     # SCORING & RANKING STATE
@@ -57,9 +59,8 @@ class GraphState(TypedDict):
     # ------------------------------------------------------------------
     # VERIFICATION LOOP STATE
     # ------------------------------------------------------------------
-    # operator.add — each verification pass appends new rewrite requests
-    # so the Synthesizer can see the full correction history.
-    rewrite_requests: Annotated[Sequence[str], operator.add]
+    # Current-pass rewrite requests only. Replaced on every verification pass.
+    rewrite_requests: list[str]
     # Overwritten each pass — number of NEW rewrite requests from the
     # most recent verification pass. Used by route_post_verification to
     # decide whether to loop (accumulated list is for correction context).
@@ -68,6 +69,7 @@ class GraphState(TypedDict):
     loop_count: int
     # Number of times retrieval has been retried due to persistent failures.
     retrieval_retry_count: int
+    mechanical_results: dict[str, dict]
 
     # ------------------------------------------------------------------
     # OUTPUT STATE
@@ -98,6 +100,8 @@ def make_initial_state(
         pipeline_config=pipeline_config,
         search_queries=[],
         indexed_chunks=[],
+        next_doc_index=1,
+        past_seen_urls=[],
         scored_chunks=[],
         ranked_chunks=[],
         is_answerable=True,
@@ -106,6 +110,26 @@ def make_initial_state(
         pending_rewrite_count=0,
         loop_count=0,
         retrieval_retry_count=0,
+        mechanical_results={},
         final_sentences=[],
         audit_trail=[],
     )
+
+
+def reset_verification_state() -> dict:
+    """Return the canonical reset dict for verification-related fields.
+
+    Used by ``retriever_with_retry`` (graph.py) to clear stale verification
+    state before a fresh retrieval pass.  Centralising this here ensures
+    that new verification fields are reset in one place rather than being
+    scattered across multiple call sites.
+    """
+    return {
+        "draft_sentences": [],
+        "final_sentences": [],
+        "mechanical_results": {},
+        "rewrite_requests": [],
+        "pending_rewrite_count": 0,
+        "scored_chunks": [],
+        "ranked_chunks": [],
+    }

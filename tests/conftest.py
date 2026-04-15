@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 import axiom_engine.main as _main_module
 from axiom_engine.main import app
+from axiom_engine.nodes.retriever import MockSearchBackend, set_search_backend
 
 # ---------------------------------------------------------------------------
 # Reusable helpers
@@ -40,7 +41,7 @@ def make_final_sentence_dict(
     """Build a FinalSentence-shaped dict for test assertions."""
     label_map = {
         1: "authoritative",
-        2: "consensus",
+        2: "multi_source",
         3: "model_assisted",
         4: "misrepresented",
         5: "hallucinated",
@@ -84,5 +85,8 @@ def client(monkeypatch):
     """TestClient fixture with clean cache and no Tavily key."""
     _main_module._response_cache.clear()
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.setenv("AXIOM_ENV", "test")
+    monkeypatch.delenv("AXIOM_API_KEYS", raising=False)
+    set_search_backend(MockSearchBackend([]))
     with TestClient(app) as c:
         yield c
