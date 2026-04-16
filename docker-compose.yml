@@ -1,12 +1,12 @@
 services:
 
   # ── Axiom Engine API ──────────────────────────────────────────────────────
-  axiom-engine:
+  axiom-rag-engine:
     build:
       context: .
       dockerfile: Dockerfile
-    image: axiom-engine:latest
-    container_name: axiom-engine
+    image: axiom-rag-engine:latest
+    container_name: axiom-rag-engine
     ports:
       - "8000:8000"
     env_file:

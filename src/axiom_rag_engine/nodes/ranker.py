@@ -19,11 +19,11 @@ from collections import Counter
 from functools import partial
 from typing import Any
 
-from axiom_engine.state import GraphState
-from axiom_engine.utils.audit import make_audit_event
+from axiom_rag_engine.state import GraphState
+from axiom_rag_engine.utils.audit import make_audit_event
 
 _audit = partial(make_audit_event, "ranker")
-logger = logging.getLogger("axiom_engine.ranker")
+logger = logging.getLogger("axiom_rag_engine.ranker")
 
 # ---------------------------------------------------------------------------
 # Text tokenization for keyword matching

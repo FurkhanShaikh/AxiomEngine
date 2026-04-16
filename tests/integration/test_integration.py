@@ -21,8 +21,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from axiom_engine.main import app
-from axiom_engine.nodes.retriever import MockSearchBackend, set_search_backend
+from axiom_rag_engine.main import app
+from axiom_rag_engine.nodes.retriever import MockSearchBackend, set_search_backend
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -269,7 +269,7 @@ class TestLiveFullPipeline:
 
     def test_response_conforms_to_axiom_response_schema(self, client: TestClient) -> None:
         """The raw JSON response should validate against AxiomResponse."""
-        from axiom_engine.models import AxiomResponse
+        from axiom_rag_engine.models import AxiomResponse
 
         resp = client.post("/v1/synthesize", json=_make_request())
         assert resp.status_code == 200

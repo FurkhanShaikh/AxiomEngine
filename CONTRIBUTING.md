@@ -33,11 +33,11 @@ python tasks.py test             # pytest with >=70% coverage
 
 ## Configuration changes
 
-All `AXIOM_*` env vars should be declared in `src/axiom_engine/config/settings.py`. Do not read env vars directly with `os.getenv` — use `get_settings().<field>`.
+All `AXIOM_*` env vars should be declared in `src/axiom_rag_engine/config/settings.py`. Do not read env vars directly with `os.getenv` — use `get_settings().<field>`.
 
 ## Reporting issues
 
-Open an issue at https://github.com/FurkhanShaikh/axiom-engine/issues with:
+Open an issue at https://github.com/FurkhanShaikh/axiom-rag-engine/issues with:
 - Steps to reproduce
 - Expected vs. actual behavior
 - Python version + OS

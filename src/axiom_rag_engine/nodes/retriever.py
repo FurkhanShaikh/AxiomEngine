@@ -30,12 +30,12 @@ import pysbd
 import trafilatura
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from axiom_engine.config.observability import get_tracer
-from axiom_engine.state import GraphState
-from axiom_engine.utils.audit import make_audit_event
+from axiom_rag_engine.config.observability import get_tracer
+from axiom_rag_engine.state import GraphState
+from axiom_rag_engine.utils.audit import make_audit_event
 
 _audit = partial(make_audit_event, "retriever")
-logger = logging.getLogger("axiom_engine.retriever")
+logger = logging.getLogger("axiom_rag_engine.retriever")
 
 # ---------------------------------------------------------------------------
 # Chunk ID generation — sequential alphanumeric labels (A, B, C, ..., Z, AA, AB, ...)

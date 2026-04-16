@@ -1,5 +1,5 @@
 [project]
-name = "axiom-rag"
+name = "axiom-rag-engine"
 version = "0.1.0b1"
 description = "Citation-verified RAG service with deterministic + semantic claim verification."
 readme = "README.md"
@@ -56,24 +56,24 @@ dependencies = [
 redis = ["redis>=5.0"]
 
 [project.urls]
-Homepage = "https://github.com/FurkhanShaikh/axiom-engine"
-Repository = "https://github.com/FurkhanShaikh/axiom-engine"
-Issues = "https://github.com/FurkhanShaikh/axiom-engine/issues"
-Changelog = "https://github.com/FurkhanShaikh/axiom-engine/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/FurkhanShaikh/axiom-rag-engine"
+Repository = "https://github.com/FurkhanShaikh/axiom-rag-engine"
+Issues = "https://github.com/FurkhanShaikh/axiom-rag-engine/issues"
+Changelog = "https://github.com/FurkhanShaikh/axiom-rag-engine/blob/main/CHANGELOG.md"
 
 [project.scripts]
-axiom-engine = "axiom_engine.__main__:main"
+axiom-rag-engine = "axiom_rag_engine.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/axiom_engine"]
+packages = ["src/axiom_rag_engine"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "src/axiom_engine",
+    "src/axiom_rag_engine",
     "README.md",
     "LICENSE",
     "CHANGELOG.md",
@@ -93,7 +93,7 @@ dev = [
 
 [tool.pytest.ini_options]
 minversion = "8.4"
-addopts = "-ra -q --cov=axiom_engine --cov-report=term-missing"
+addopts = "-ra -q --cov=axiom_rag_engine --cov-report=term-missing"
 testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
@@ -113,7 +113,7 @@ ignore = ["E501", "RUF001", "RUF002"]  # E501: handled by ruff format; RUF001/2:
 "tests/**" = ["S101", "T20"]  # S101: assert is expected in pytest; T20: allow print()
 
 [tool.ruff.lint.isort]
-known-first-party = ["axiom_engine"]
+known-first-party = ["axiom_rag_engine"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -138,7 +138,7 @@ module = [
 ignore_missing_imports = true
 
 [tool.coverage.run]
-source = ["axiom_engine"]
+source = ["axiom_rag_engine"]
 
 [tool.coverage.report]
 show_missing = true

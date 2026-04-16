@@ -11,7 +11,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.0 /uv /usr/local/bin/uv
 WORKDIR /app
 
 # Copy dependency manifests first so Docker can cache this layer.
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md LICENSE ./
 
 # Install runtime dependencies into an isolated venv (no dev extras).
 # --frozen: honour uv.lock exactly; --no-install-project: deps only, not src yet.
@@ -50,4 +50,4 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8000/health/ready || exit 1
 
 # Uvicorn: single worker per container; scale horizontally via compose/k8s.
-CMD ["uvicorn", "axiom_engine.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["uvicorn", "axiom_rag_engine.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

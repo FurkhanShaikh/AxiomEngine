@@ -13,10 +13,10 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-import axiom_engine.main as _main_module
-from axiom_engine.config.settings import get_settings
-from axiom_engine.main import app
-from axiom_engine.nodes.retriever import MockSearchBackend, set_search_backend
+import axiom_rag_engine.main as _main_module
+from axiom_rag_engine.config.settings import get_settings
+from axiom_rag_engine.main import app
+from axiom_rag_engine.nodes.retriever import MockSearchBackend, set_search_backend
 
 # ---------------------------------------------------------------------------
 # Reusable helpers

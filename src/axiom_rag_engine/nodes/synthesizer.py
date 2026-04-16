@@ -25,11 +25,11 @@ from typing import Any
 import litellm
 from pydantic import ValidationError
 
-from axiom_engine.config.observability import LLM_CALL_DURATION, get_tracer, safe_model_label
-from axiom_engine.models import SynthesizerOutput
-from axiom_engine.state import GraphState
-from axiom_engine.utils.audit import make_audit_event
-from axiom_engine.utils.llm import (
+from axiom_rag_engine.config.observability import LLM_CALL_DURATION, get_tracer, safe_model_label
+from axiom_rag_engine.models import SynthesizerOutput
+from axiom_rag_engine.state import GraphState
+from axiom_rag_engine.utils.audit import make_audit_event
+from axiom_rag_engine.utils.llm import (
     build_completion_kwargs,
     consume_llm_budget,
     get_llm_semaphore,
@@ -37,7 +37,7 @@ from axiom_engine.utils.llm import (
 )
 
 _audit = partial(make_audit_event, "synthesizer")
-logger = logging.getLogger("axiom_engine.synthesizer")
+logger = logging.getLogger("axiom_rag_engine.synthesizer")
 
 # ---------------------------------------------------------------------------
 # Prompt templates

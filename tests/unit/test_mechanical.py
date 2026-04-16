@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from axiom_engine.verifiers.mechanical import (
+from axiom_rag_engine.verifiers.mechanical import (
     MechanicalVerifier,
 )
 

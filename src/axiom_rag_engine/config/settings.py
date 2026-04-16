@@ -1,0 +1,245 @@
+"""
+Axiom Engine — Centralized runtime configuration.
+
+Every `AXIOM_*` environment variable the service reads is declared here,
+with a type, a default, and a short description. A single `Settings`
+instance is the authoritative source — no code should call `os.getenv` for
+an `AXIOM_*` variable directly.
+
+Usage:
+
+    from axiom_rag_engine.config.settings import get_settings
+
+    settings = get_settings()
+    if settings.allow_mock_search:
+        ...
+
+`get_settings()` is cached, so repeated calls are cheap. Tests that need
+to override configuration should call `get_settings.cache_clear()` between
+cases (see `tests/conftest.py`).
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import Annotated, Any, Literal
+
+from pydantic import BeforeValidator, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources import (
+    DotEnvSettingsSource,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+)
+
+# ---------------------------------------------------------------------------
+# Custom field type — comma-separated list
+# ---------------------------------------------------------------------------
+# pydantic-settings' default env parser expects JSON (e.g. '["a","b"]') for
+# list[str] fields. Every existing AXIOM_* list variable is comma-separated,
+# so we define a custom env source that falls back to the raw string when
+# JSON decoding fails, letting pydantic's BeforeValidator split on commas.
+
+
+def _split_csv(value: Any) -> list[str]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value]
+    return [str(value)]
+
+
+CommaSepList = Annotated[list[str], BeforeValidator(_split_csv)]
+
+
+class _CsvFriendlyEnvSource(EnvSettingsSource):
+    """Env source that falls back to the raw string when JSON decoding fails.
+
+    This lets CommaSepList fields accept both ``"a,b,c"`` and ``'["a","b","c"]'``.
+    """
+
+    def decode_complex_value(self, field_name: str, field: Any, value: Any) -> Any:
+        try:
+            return super().decode_complex_value(field_name, field, value)
+        except ValueError:
+            return value
+
+
+class _CsvFriendlyDotEnvSource(DotEnvSettingsSource):
+    """Same fallback for .env file values."""
+
+    def decode_complex_value(self, field_name: str, field: Any, value: Any) -> Any:
+        try:
+            return super().decode_complex_value(field_name, field, value)
+        except ValueError:
+            return value
+
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+
+class Settings(BaseSettings):
+    """Axiom Engine runtime configuration.
+
+    All fields are populated from environment variables (and optionally a
+    `.env` file in the working directory). Field names map to env vars by
+    prefixing with `AXIOM_` and uppercasing — e.g. `rate_limit` is read
+    from `AXIOM_RATE_LIMIT`.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="AXIOM_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # ── Runtime ──────────────────────────────────────────────────────────
+    env: Literal["production", "development", "dev", "local", "test"] = Field(
+        default="production",
+        description="Runtime environment. Non-production values disable auth requirements.",
+    )
+    docs_enabled: bool = Field(
+        default=True,
+        description="If false, /docs and /redoc are disabled.",
+    )
+
+    # ── Auth ─────────────────────────────────────────────────────────────
+    api_keys: CommaSepList = Field(
+        default_factory=list,
+        description="Comma-separated list of valid API keys. Required when env != development.",
+    )
+
+    # ── LLM defaults ─────────────────────────────────────────────────────
+    default_synthesizer_model: str = Field(
+        default="claude-sonnet-4-5",
+        description="Default synthesizer LiteLLM model ID.",
+    )
+    default_verifier_model: str = Field(
+        default="gpt-4o-mini",
+        description="Default verifier LiteLLM model ID.",
+    )
+
+    # ── Rate limiting / response cache ───────────────────────────────────
+    rate_limit: str = Field(
+        default="20/minute",
+        description="SlowAPI rate-limit string applied per API key or IP.",
+    )
+    cache_ttl_seconds: int = Field(
+        default=300,
+        description="TTL for the in-process response cache.",
+    )
+    cache_max_size: int = Field(
+        default=256,
+        description="Max entries in the in-process response cache.",
+    )
+    redis_url: str | None = Field(
+        default=None,
+        description="If set, use Redis for the response cache instead of in-memory TTLCache.",
+        alias="AXIOM_REDIS_URL",
+    )
+
+    # ── Search / retrieval ───────────────────────────────────────────────
+    allow_mock_search: bool = Field(
+        default=False,
+        description="If true, allow MockSearchBackend in non-development envs.",
+    )
+    authoritative_domains: CommaSepList = Field(
+        default_factory=list,
+        description="Extra domains treated as authoritative by the scorer.",
+    )
+    low_quality_domains: CommaSepList = Field(
+        default_factory=list,
+        description="Domains to down-rank during scoring.",
+    )
+    exclude_default_domains: CommaSepList = Field(
+        default_factory=list,
+        description="Domains to strip from the built-in authoritative list.",
+    )
+
+    # ── Verification ─────────────────────────────────────────────────────
+    semantic_verification_enabled: bool = Field(
+        default=True,
+        description="Server policy for semantic verification (Stage 2).",
+    )
+
+    # ── Security / limits ────────────────────────────────────────────────
+    cors_origins: CommaSepList = Field(
+        default_factory=list,
+        description="Allowed CORS origins. Wildcard is rejected.",
+    )
+    trusted_proxy_ips: CommaSepList = Field(
+        default_factory=list,
+        description="IPs whose X-Forwarded-For headers may be trusted. Use '*' only behind a private ingress.",
+    )
+    max_body_bytes: int = Field(
+        default=128 * 1024,
+        description="Hard cap on request body size.",
+    )
+
+    # ── Observability ────────────────────────────────────────────────────
+    log_format: Literal["text", "json"] = Field(
+        default="text",
+        description="Log output format. 'json' is recommended for production aggregation.",
+        alias="LOG_FORMAT",
+    )
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Helpers
+    # ─────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            _CsvFriendlyEnvSource(settings_cls),
+            _CsvFriendlyDotEnvSource(settings_cls),
+            file_secret_settings,
+        )
+
+    _NON_PROD_ENVS = frozenset({"development", "dev", "local", "test"})
+
+    def auth_required(self) -> bool:
+        """Return True unless the runtime env is an explicit non-prod alias."""
+        return self.env.lower() not in self._NON_PROD_ENVS
+
+    def redacted_dict(self) -> dict[str, Any]:
+        """Return settings as a dict with secrets masked. Used by `check-config`."""
+        data = self.model_dump()
+        if data.get("api_keys"):
+            data["api_keys"] = [f"***{len(k)}" for k in data["api_keys"]]
+        if data.get("redis_url"):
+            data["redis_url"] = _redact_url(data["redis_url"])
+        return data
+
+
+def _redact_url(url: str) -> str:
+    """Mask the password in a URL like redis://user:pw@host:6379/0."""
+    try:
+        from urllib.parse import urlparse, urlunparse
+
+        parsed = urlparse(url)
+        if parsed.password:
+            netloc = parsed.netloc.replace(f":{parsed.password}@", ":***@")
+            return urlunparse(parsed._replace(netloc=netloc))
+    except Exception:
+        return "***"
+    return url
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Return the process-wide Settings instance (cached)."""
+    return Settings()

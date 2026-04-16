@@ -23,17 +23,17 @@ import logging
 from functools import partial
 from typing import Any, cast
 
-from axiom_engine.config.observability import LOOP_EXHAUSTED_TIER5, get_tracer
-from axiom_engine.models import VerificationResult
-from axiom_engine.nodes.semantic import semantic_verifier_node
-from axiom_engine.state import GraphState
-from axiom_engine.utils.audit import make_audit_event
-from axiom_engine.verifiers.mechanical import MechanicalVerifier
+from axiom_rag_engine.config.observability import LOOP_EXHAUSTED_TIER5, get_tracer
+from axiom_rag_engine.models import VerificationResult
+from axiom_rag_engine.nodes.semantic import semantic_verifier_node
+from axiom_rag_engine.state import GraphState
+from axiom_rag_engine.utils.audit import make_audit_event
+from axiom_rag_engine.verifiers.mechanical import MechanicalVerifier
 
 # Module-level singleton — stateless, safe to reuse.
 _mechanical = MechanicalVerifier()
 _audit = partial(make_audit_event, "verifier")
-logger = logging.getLogger("axiom_engine.verifier")
+logger = logging.getLogger("axiom_rag_engine.verifier")
 
 
 def _build_tier5_rewrite_request(

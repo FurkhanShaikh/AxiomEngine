@@ -19,12 +19,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from axiom_engine.nodes.semantic import _parse_semantic_response, semantic_verifier_node
-from axiom_engine.nodes.synthesizer import (
+from axiom_rag_engine.nodes.semantic import _parse_semantic_response, semantic_verifier_node
+from axiom_rag_engine.nodes.synthesizer import (
     _parse_llm_response,
     synthesizer_node,
 )
-from axiom_engine.state import make_initial_state
+from axiom_rag_engine.state import make_initial_state
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -154,7 +154,7 @@ _UNANSWERABLE_JSON = json.dumps({"is_answerable": False, "sentences": []})
 
 
 class TestSynthesizerNode:
-    @patch("axiom_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
     async def test_happy_path_returns_draft_sentences(self, mock_completion: AsyncMock) -> None:
         mock_completion.return_value = _mock_litellm_response(_VALID_SYNTHESIZER_JSON)
         state = _make_state(indexed_chunks=_SAMPLE_CHUNKS)
@@ -165,7 +165,7 @@ class TestSynthesizerNode:
         assert len(result["draft_sentences"]) == 1
         assert result["draft_sentences"][0]["sentence_id"] == "s_01"
 
-    @patch("axiom_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
     async def test_escape_hatch_returns_unanswerable(self, mock_completion: AsyncMock) -> None:
         mock_completion.return_value = _mock_litellm_response(_UNANSWERABLE_JSON)
         state = _make_state(indexed_chunks=_SAMPLE_CHUNKS)
@@ -175,7 +175,7 @@ class TestSynthesizerNode:
         assert result["is_answerable"] is False
         assert result["draft_sentences"] == []
 
-    @patch("axiom_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
     async def test_rewrite_section_injected_when_rewrite_requests_present(
         self, mock_completion: AsyncMock
     ) -> None:
@@ -195,7 +195,7 @@ class TestSynthesizerNode:
         assert "CORRECTION INSTRUCTIONS" in user_message["content"]
         assert "Rewrite Pass 1" in user_message["content"]
 
-    @patch("axiom_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
     async def test_no_rewrite_section_on_first_pass(self, mock_completion: AsyncMock) -> None:
         mock_completion.return_value = _mock_litellm_response(_VALID_SYNTHESIZER_JSON)
         state = _make_state(indexed_chunks=_SAMPLE_CHUNKS, rewrite_requests=[])
@@ -207,7 +207,7 @@ class TestSynthesizerNode:
         user_message = next(m for m in messages if m["role"] == "user")
         assert "CORRECTION INSTRUCTIONS" not in user_message["content"]
 
-    @patch("axiom_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
     async def test_empty_ranked_chunks_emits_fallback_audit_event(
         self, mock_completion: AsyncMock
     ) -> None:
@@ -221,7 +221,7 @@ class TestSynthesizerNode:
         event_types = [e["event_type"] for e in result["audit_trail"]]
         assert "synthesizer_ranked_empty_fallback" in event_types
 
-    @patch("axiom_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
     async def test_ranked_chunks_preferred_over_indexed_chunks(
         self, mock_completion: AsyncMock
     ) -> None:
@@ -237,7 +237,7 @@ class TestSynthesizerNode:
         assert "doc_3_chunk_X" in user_message["content"]
         assert "doc_1_chunk_A" not in user_message["content"]
 
-    @patch("axiom_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
     async def test_api_failure_raises_runtime_error(self, mock_completion: AsyncMock) -> None:
         mock_completion.side_effect = Exception("LLM API timeout")
         state = _make_state(indexed_chunks=_SAMPLE_CHUNKS)
@@ -245,7 +245,7 @@ class TestSynthesizerNode:
         with pytest.raises(RuntimeError, match="Synthesizer stage failed"):
             await synthesizer_node(state)
 
-    @patch("axiom_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
     async def test_audit_trail_populated(self, mock_completion: AsyncMock) -> None:
         mock_completion.return_value = _mock_litellm_response(_VALID_SYNTHESIZER_JSON)
         state = _make_state(indexed_chunks=_SAMPLE_CHUNKS)
@@ -257,7 +257,7 @@ class TestSynthesizerNode:
         assert "synthesizer_start" in event_types
         assert "synthesizer_complete" in event_types
 
-    @patch("axiom_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
     async def test_audit_event_unanswerable_escape_hatch(self, mock_completion: AsyncMock) -> None:
         mock_completion.return_value = _mock_litellm_response(_UNANSWERABLE_JSON)
         state = _make_state(indexed_chunks=_SAMPLE_CHUNKS)
@@ -267,7 +267,7 @@ class TestSynthesizerNode:
         event_types = [e["event_type"] for e in result["audit_trail"]]
         assert "synthesizer_unanswerable" in event_types
 
-    @patch("axiom_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
     async def test_uses_model_from_state(self, mock_completion: AsyncMock) -> None:
         mock_completion.return_value = _mock_litellm_response(_VALID_SYNTHESIZER_JSON)
         state = _make_state(indexed_chunks=_SAMPLE_CHUNKS, synthesizer_model="gpt-4o")
@@ -277,7 +277,7 @@ class TestSynthesizerNode:
         call_kwargs = mock_completion.call_args[1]
         assert call_kwargs["model"] == "gpt-4o"
 
-    @patch("axiom_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
     async def test_temperature_is_zero(self, mock_completion: AsyncMock) -> None:
         """Deterministic output is mandatory for citation integrity."""
         mock_completion.return_value = _mock_litellm_response(_VALID_SYNTHESIZER_JSON)
@@ -319,7 +319,7 @@ class TestSynthesizerParsing:
         with pytest.raises(ValueError, match="schema"):
             _parse_llm_response(bad)
 
-    @patch("axiom_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
     async def test_malformed_response_retried(self, mock_completion: AsyncMock) -> None:
         """First call returns garbage; second returns valid JSON — should succeed."""
         valid_response = _mock_litellm_response(_VALID_SYNTHESIZER_JSON)
@@ -332,7 +332,7 @@ class TestSynthesizerParsing:
         assert result["is_answerable"] is True
         assert mock_completion.call_count == 2
 
-    @patch("axiom_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.synthesizer.litellm.acompletion", new_callable=AsyncMock)
     async def test_exhausted_retries_raise_runtime_error(self, mock_completion: AsyncMock) -> None:
         """Both attempts return garbage — malformed output is a stage failure."""
         bad = _mock_litellm_response("not json")
@@ -390,7 +390,7 @@ class TestSemanticVerifierTierAssignment:
             mechanical_results={"cite_1": _mech_result("passed")},
         )
         with patch(
-            "axiom_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock
+            "axiom_rag_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock
         ) as mock_comp:
             mock_comp.return_value = _mock_litellm_response(_semantic_pass_json())
             result = await semantic_verifier_node(state)
@@ -425,7 +425,7 @@ class TestSemanticVerifierTierAssignment:
             mechanical_results={"cite_1": _mech_result("passed"), "cite_2": _mech_result("passed")},
         )
         with patch(
-            "axiom_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock
+            "axiom_rag_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock
         ) as mock_comp:
             mock_comp.side_effect = [
                 _mock_litellm_response(_semantic_pass_json()),
@@ -458,7 +458,7 @@ class TestSemanticVerifierTierAssignment:
             mechanical_results={"cite_1": _mech_result("passed")},
         )
         with patch(
-            "axiom_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock
+            "axiom_rag_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock
         ) as mock_comp:
             mock_comp.return_value = _mock_litellm_response(_semantic_pass_json())
             result = await semantic_verifier_node(state)
@@ -488,7 +488,7 @@ class TestSemanticVerifierTierAssignment:
             mechanical_results={"cite_1": _mech_result("passed")},
         )
         with patch(
-            "axiom_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock
+            "axiom_rag_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock
         ) as mock_comp:
             mock_comp.return_value = _mock_litellm_response(
                 _semantic_fail_json("Claim overstates 'improves' as 'perfect'.")
@@ -523,7 +523,7 @@ class TestSemanticVerifierStateUpdates:
         result = await semantic_verifier_node(state)
         assert "loop_count" not in result
 
-    @patch("axiom_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock)
     async def test_uncited_transition_sentence_gets_tier_3_no_rewrite(
         self, mock_comp: AsyncMock
     ) -> None:
@@ -546,7 +546,7 @@ class TestSemanticVerifierStateUpdates:
         assert not result["rewrite_requests"]
         mock_comp.assert_not_called()
 
-    @patch("axiom_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock)
     async def test_mechanical_failed_citation_skipped_by_semantic(
         self, mock_comp: AsyncMock
     ) -> None:
@@ -573,7 +573,7 @@ class TestSemanticVerifierStateUpdates:
         mock_comp.assert_not_called()
         assert result["final_sentences"][0]["verification"]["tier"] == 5
 
-    @patch("axiom_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock)
     async def test_final_sentences_include_citation_verification(
         self, mock_comp: AsyncMock
     ) -> None:
@@ -602,7 +602,7 @@ class TestSemanticVerifierStateUpdates:
         assert citation["verification"]["mechanical_check"] == "passed"
         assert "verification" in citation
 
-    @patch("axiom_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock)
     async def test_audit_trail_populated(self, mock_comp: AsyncMock) -> None:
         mock_comp.return_value = _mock_litellm_response(_semantic_pass_json())
         draft = [
@@ -658,7 +658,7 @@ class TestSemanticVerifierDegradation:
             semantic_enabled=False,
         )
         with patch(
-            "axiom_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock
+            "axiom_rag_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock
         ) as mock_comp:
             result = await semantic_verifier_node(state)
             mock_comp.assert_not_called()
@@ -667,7 +667,7 @@ class TestSemanticVerifierDegradation:
         assert vr["tier"] == 3
         assert vr["semantic_check"] == "skipped"
 
-    @patch("axiom_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock)
+    @patch("axiom_rag_engine.nodes.semantic.litellm.acompletion", new_callable=AsyncMock)
     async def test_api_failure_degrades_to_tier_3(self, mock_comp: AsyncMock) -> None:
         """LLM errors on a single citation degrade it to Tier 3 (not tank the whole pass)."""
         mock_comp.side_effect = Exception("Semantic LLM unavailable")

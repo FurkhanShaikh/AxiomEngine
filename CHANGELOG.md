@@ -13,7 +13,7 @@ First public beta release.
 - **RAG pipeline** — LangGraph DAG with retriever, scorer, ranker, synthesizer, and two-stage verifier (mechanical + semantic).
 - **6-tier confidence scoring** — every cited claim is assigned a verification tier (1-Authoritative through 6-Conflicted).
 - **Central configuration** (`config/settings.py`) — all `AXIOM_*` env vars in one typed `Settings` class backed by `pydantic-settings`. No code changes needed to configure.
-- **CLI entry point** (`axiom-engine`) with `serve`, `probe`, and `check-config` subcommands.
+- **CLI entry point** (`axiom-rag-engine`) with `serve`, `probe`, and `check-config` subcommands.
 - **FastAPI HTTP API** — `POST /v1/synthesize`, health probes, Prometheus metrics.
 - **Search backends** — Tavily live web search with automatic fallback to mock backend.
 - **LLM flexibility** — any LiteLLM-supported model, including local Ollama.
@@ -24,4 +24,4 @@ First public beta release.
 - **Publish workflow** — tag-triggered release to TestPyPI (rc tags) and PyPI via Trusted Publishing.
 - `tasks.py` developer task runner (install, run, test, lint, format, probe, clean).
 
-[0.1.0b1]: https://github.com/FurkhanShaikh/axiom-engine/releases/tag/v0.1.0b1
+[0.1.0b1]: https://github.com/FurkhanShaikh/axiom-rag-engine/releases/tag/v0.1.0b1

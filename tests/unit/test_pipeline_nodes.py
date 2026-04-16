@@ -12,14 +12,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from axiom_engine.nodes.ranker import (
+from axiom_rag_engine.nodes.ranker import (
     _tokenize,
     compute_corpus_idf,
     compute_ranking_score,
     compute_relevance_score,
     ranker_node,
 )
-from axiom_engine.nodes.retriever import (
+from axiom_rag_engine.nodes.retriever import (
     MockSearchBackend,
     _chunk_label,
     chunk_into_paragraphs,
@@ -30,14 +30,14 @@ from axiom_engine.nodes.retriever import (
     set_search_backend,
     strip_html,
 )
-from axiom_engine.nodes.scorer import (
+from axiom_rag_engine.nodes.scorer import (
     _normalize_domain,
     compute_combined_score,
     score_chunk_quality,
     score_source_quality,
     scorer_node,
 )
-from axiom_engine.state import make_initial_state
+from axiom_rag_engine.state import make_initial_state
 
 # ---------------------------------------------------------------------------
 # Helpers

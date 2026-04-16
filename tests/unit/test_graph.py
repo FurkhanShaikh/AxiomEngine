@@ -17,10 +17,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from axiom_engine.graph import build_axiom_graph, route_post_verification
-from axiom_engine.nodes.retriever import MockSearchBackend, set_search_backend
-from axiom_engine.nodes.verification import verification_node
-from axiom_engine.state import make_initial_state
+from axiom_rag_engine.graph import build_axiom_graph, route_post_verification
+from axiom_rag_engine.nodes.retriever import MockSearchBackend, set_search_backend
+from axiom_rag_engine.nodes.verification import verification_node
+from axiom_rag_engine.state import make_initial_state
 
 # Synthesizer and Semantic models used in tests — must match _base_state.
 _SYNTH_MODEL = "claude-3-5-sonnet-20241022"
@@ -539,7 +539,7 @@ class TestFullPipelineIntegration:
     @patch("litellm.acompletion", new_callable=AsyncMock)
     async def test_full_pipeline_from_retriever_to_end(self, mock_llm: AsyncMock) -> None:
         """Mock search → retriever → scorer → ranker → synth → verify → END."""
-        from axiom_engine.nodes.retriever import MockSearchBackend, set_search_backend
+        from axiom_rag_engine.nodes.retriever import MockSearchBackend, set_search_backend
 
         # Set up search backend with results that will survive chunking.
         set_search_backend(
@@ -610,7 +610,7 @@ class TestFullPipelineIntegration:
     @patch("litellm.acompletion", new_callable=AsyncMock)
     async def test_full_pipeline_with_banned_domain(self, mock_llm: AsyncMock) -> None:
         """Banned domain results are filtered before reaching the synthesizer."""
-        from axiom_engine.nodes.retriever import MockSearchBackend, set_search_backend
+        from axiom_rag_engine.nodes.retriever import MockSearchBackend, set_search_backend
 
         set_search_backend(
             MockSearchBackend(
@@ -682,7 +682,7 @@ class TestFullPipelineIntegration:
         self, mock_llm: AsyncMock
     ) -> None:
         """No search results → no chunks → synthesizer says unanswerable."""
-        from axiom_engine.nodes.retriever import MockSearchBackend, set_search_backend
+        from axiom_rag_engine.nodes.retriever import MockSearchBackend, set_search_backend
 
         set_search_backend(MockSearchBackend([]))
 

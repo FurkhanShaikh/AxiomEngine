@@ -51,7 +51,7 @@ def install() -> None:
 
 def run() -> None:
     """Start the FastAPI development server at http://localhost:8000."""
-    _run("uv", "run", "uvicorn", "axiom_engine.main:app", "--reload")
+    _run("uv", "run", "uvicorn", "axiom_rag_engine.main:app", "--reload")
 
 
 def test() -> None:

@@ -1,6 +1,6 @@
 """
 Phase 1 — TDD: Pydantic model and GraphState validation tests.
-Run with:  pytest axiom_engine/test_models.py -v
+Run with:  pytest axiom_rag_engine/test_models.py -v
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from typing import get_type_hints
 import pytest
 from pydantic import ValidationError
 
-from axiom_engine.models import (
+from axiom_rag_engine.models import (
     AppConfig,
     AxiomRequest,
     AxiomResponse,
@@ -27,7 +27,7 @@ from axiom_engine.models import (
     VerificationResult,
     VerifiedCitation,
 )
-from axiom_engine.state import GraphState, make_initial_state
+from axiom_rag_engine.state import GraphState, make_initial_state
 
 # ===========================================================================
 # AppConfig

@@ -21,16 +21,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-import axiom_engine.main as _main_module
-from axiom_engine.main import (
+import axiom_rag_engine.main as _main_module
+from axiom_rag_engine.main import (
     app,
     compute_confidence_summary,
     determine_status,
     make_error_response,
     marshal_response,
 )
-from axiom_engine.models import AxiomResponse
-from axiom_engine.nodes.retriever import MockSearchBackend, set_search_backend
+from axiom_rag_engine.models import AxiomResponse
+from axiom_rag_engine.nodes.retriever import MockSearchBackend, set_search_backend
 from tests.conftest import make_final_sentence_dict, mock_litellm_response
 
 # ---------------------------------------------------------------------------

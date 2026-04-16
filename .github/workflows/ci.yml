@@ -49,7 +49,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
       - name: Run tests
-        run: uv run pytest -m "not integration" --cov=axiom_engine --cov-report=term-missing
+        run: uv run pytest -m "not integration" --cov=axiom_rag_engine --cov-report=term-missing
 
   security:
     runs-on: ubuntu-latest
@@ -69,4 +69,4 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Build Docker image
-        run: docker build -t axiom-engine:ci .
+        run: docker build -t axiom-rag-engine:ci .

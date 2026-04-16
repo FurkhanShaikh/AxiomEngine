@@ -21,11 +21,11 @@ import re
 from functools import partial
 from typing import Any
 
-from axiom_engine.state import GraphState
-from axiom_engine.utils.audit import make_audit_event
+from axiom_rag_engine.state import GraphState
+from axiom_rag_engine.utils.audit import make_audit_event
 
 _audit = partial(make_audit_event, "scorer")
-logger = logging.getLogger("axiom_engine.scorer")
+logger = logging.getLogger("axiom_rag_engine.scorer")
 
 # ---------------------------------------------------------------------------
 # Source quality — built-in defaults (overridable via app_config)
