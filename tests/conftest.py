@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import axiom_engine.main as _main_module
+from axiom_engine.config.settings import get_settings
 from axiom_engine.main import app
 from axiom_engine.nodes.retriever import MockSearchBackend, set_search_backend
 
@@ -78,6 +79,19 @@ SAMPLE_CHUNKS = [
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_settings_cache():
+    """Clear the Settings LRU cache before and after every test.
+
+    Settings reads env vars once per instantiation, so tests that use
+    `monkeypatch.setenv` need a fresh Settings object to observe the
+    override. Autouse guarantees the cache is always clean.
+    """
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 @pytest.fixture()

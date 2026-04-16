@@ -26,7 +26,6 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any
 
-from dotenv import load_dotenv
 from fastapi import (  # noqa: F401 — HTTPException re-exported for test compat
     Depends,
     FastAPI,
@@ -57,6 +56,7 @@ from axiom_engine.config.observability import (
     setup_prometheus,
     setup_tracing,
 )
+from axiom_engine.config.settings import get_settings
 from axiom_engine.graph import build_axiom_graph
 from axiom_engine.marshalling import make_error_response, marshal_response
 from axiom_engine.models import AxiomRequest, AxiomResponse
@@ -68,9 +68,6 @@ from axiom_engine.scoring import (  # noqa: F401 — re-exported
 from axiom_engine.state import make_initial_state
 from axiom_engine.utils.llm import LLMBudgetExceededError, reset_llm_budget
 
-load_dotenv()  # Load .env from project root; no-op if absent.
-
-
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -78,23 +75,12 @@ load_dotenv()  # Load .env from project root; no-op if absent.
 logger = logging.getLogger("axiom_engine")
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _csv_env(name: str) -> list[str]:
-    return [part.strip() for part in os.environ.get(name, "").split(",") if part.strip()]
-
-
 def _allow_mock_search() -> bool:
-    return _env_bool("AXIOM_ALLOW_MOCK_SEARCH", default=False)
+    return get_settings().allow_mock_search
 
 
 def _semantic_verification_enabled() -> bool:
-    return _env_bool("AXIOM_SEMANTIC_VERIFICATION_ENABLED", default=True)
+    return get_settings().semantic_verification_enabled
 
 
 def _effective_app_config(payload: AxiomRequest) -> dict[str, Any]:
@@ -111,9 +97,10 @@ def _effective_app_config(payload: AxiomRequest) -> dict[str, Any]:
             ", ".join(ignored_fields),
         )
 
-    effective["authoritative_domains"] = _csv_env("AXIOM_AUTHORITATIVE_DOMAINS")
-    effective["low_quality_domains"] = _csv_env("AXIOM_LOW_QUALITY_DOMAINS")
-    effective["exclude_default_domains"] = _csv_env("AXIOM_EXCLUDE_DEFAULT_DOMAINS")
+    settings = get_settings()
+    effective["authoritative_domains"] = list(settings.authoritative_domains)
+    effective["low_quality_domains"] = list(settings.low_quality_domains)
+    effective["exclude_default_domains"] = list(settings.exclude_default_domains)
     return effective
 
 
@@ -144,7 +131,7 @@ def get_real_ip(request: Request) -> str:
     a reverse proxy (nginx, cloud LB) and trust only its header additions.
     """
     forwarded = request.headers.get("X-Forwarded-For")
-    trusted_proxies = set(_csv_env("AXIOM_TRUSTED_PROXY_IPS"))
+    trusted_proxies = set(get_settings().trusted_proxy_ips)
     if forwarded and trusted_proxies:
         remote_ip = get_remote_address(request)
         if "*" in trusted_proxies or remote_ip in trusted_proxies:
@@ -168,19 +155,23 @@ def rate_limit_key(request: Request) -> str:
     return "ip:" + get_real_ip(request)
 
 
-# Configurable via env var; default is 20 requests/minute per IP.
-# Set AXIOM_RATE_LIMIT=100/minute in production if needed.
-_RATE_LIMIT = os.environ.get("AXIOM_RATE_LIMIT", "20/minute")
+# Rate limit + response cache are initialized from Settings at import time.
+# These remain module-level because slowapi's Limiter and the TTLCache must
+# exist before the FastAPI app is constructed (middleware is added before
+# startup, which Starlette forbids modifying afterward).
+_startup_settings = get_settings()
 
-limiter = Limiter(key_func=rate_limit_key, default_limits=[_RATE_LIMIT])
-
+limiter = Limiter(
+    key_func=rate_limit_key,
+    default_limits=[_startup_settings.rate_limit],
+)
 
 # ---------------------------------------------------------------------------
 # Response cache (bounded, TTL-based)
 # ---------------------------------------------------------------------------
 
-_CACHE_TTL_SECONDS: int = int(os.environ.get("AXIOM_CACHE_TTL_SECONDS", "300"))
-_CACHE_MAX_SIZE: int = int(os.environ.get("AXIOM_CACHE_MAX_SIZE", "256"))
+_CACHE_TTL_SECONDS: int = _startup_settings.cache_ttl_seconds
+_CACHE_MAX_SIZE: int = _startup_settings.cache_max_size
 
 # Module-level cache backend — initialized during lifespan
 _response_cache: CacheBackend = MemoryCacheBackend(
@@ -257,7 +248,8 @@ async def lifespan(app: FastAPI):
     configure_logging()
 
     global _response_cache
-    redis_url = os.environ.get("AXIOM_REDIS_URL")
+    settings = get_settings()
+    redis_url = settings.redis_url
     if redis_url:
         try:
             _response_cache = RedisCacheBackend(redis_url=redis_url, ttl_seconds=_CACHE_TTL_SECONDS)
@@ -275,6 +267,8 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("AXIOM_API_KEYS must be configured when AXIOM_ENV is not development.")
 
     # Wire search backend — Tavily if key present, else MockSearchBackend.
+    # TAVILY_API_KEY is read directly (not via Settings) because it lacks the
+    # AXIOM_ prefix — it's a vendor credential, not an app setting.
     tavily_key = os.environ.get("TAVILY_API_KEY")
     if tavily_key:
         from axiom_engine.search.tavily import TavilySearchBackend
@@ -302,13 +296,16 @@ async def lifespan(app: FastAPI):
     logger.info("Axiom Engine shutting down.")
 
 
-try:
-    _VERSION = importlib.metadata.version("axiom-engine")
-except importlib.metadata.PackageNotFoundError:
-    _VERSION = "2.3.0-dev"
+_VERSION = "0.1.0b1-dev"
+for _dist_name in ("axiom-rag", "axiom-engine"):
+    try:
+        _VERSION = importlib.metadata.version(_dist_name)
+        break
+    except importlib.metadata.PackageNotFoundError:
+        continue
 
 # Disable interactive API docs in production (AXIOM_DOCS_ENABLED=false).
-_docs_enabled = os.environ.get("AXIOM_DOCS_ENABLED", "true").lower() == "true"
+_docs_enabled = _startup_settings.docs_enabled
 
 app = FastAPI(
     title="Axiom Engine",
@@ -322,9 +319,7 @@ app = FastAPI(
 # CORS — locked down by default; set AXIOM_CORS_ORIGINS to allow specific origins.
 # Wildcard ("*") is refused outright: browser clients should always name the
 # origins they trust, and a wildcard disables credentialed requests anyway.
-_cors_origins = [
-    o.strip() for o in os.environ.get("AXIOM_CORS_ORIGINS", "").split(",") if o.strip()
-]
+_cors_origins = list(_startup_settings.cors_origins)
 if "*" in _cors_origins:
     logger.warning(
         "AXIOM_CORS_ORIGINS contained '*'; dropping and refusing to enable wildcard CORS."
@@ -351,7 +346,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # ty
 # Hard cap on raw request-body size. Defaults to 128 KiB — far larger than any
 # legitimate AxiomRequest (user_query is capped at 10k chars + small configs)
 # and small enough to stop trivial OOM / slow-parse DoS with oversized bodies.
-_MAX_BODY_BYTES = int(os.environ.get("AXIOM_MAX_BODY_BYTES", str(128 * 1024)))
+_MAX_BODY_BYTES = _startup_settings.max_body_bytes
 
 
 @app.middleware("http")

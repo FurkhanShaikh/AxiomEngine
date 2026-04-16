@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sys
 from contextvars import ContextVar
 from datetime import UTC, datetime
 
 from opentelemetry import trace
+
+from axiom_engine.config.settings import get_settings
 
 # ---------------------------------------------------------------------------
 # Context variable for request-scoped correlation
@@ -92,7 +93,7 @@ def configure_logging(level: int = logging.INFO) -> None:
     handler = logging.StreamHandler(sys.stderr)
     handler.setLevel(level)
 
-    fmt = os.environ.get("LOG_FORMAT", "text").lower()
+    fmt = get_settings().log_format.lower()
     if fmt == "json":
         handler.setFormatter(_JSONFormatter())
     else:

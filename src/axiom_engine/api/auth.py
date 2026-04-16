@@ -10,32 +10,28 @@ from __future__ import annotations
 import functools
 import hashlib
 import hmac
-import os
 
 from fastapi import HTTPException, Security
 from fastapi.security import APIKeyHeader
 
-_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+from axiom_engine.config.settings import get_settings
 
-# H1: Fail-closed by default — auth is required unless AXIOM_ENV is explicitly set
-# to a non-production value.  Forgetting to set AXIOM_ENV in prod no longer ships
-# an open endpoint.
-_NON_PROD_ENVS = {"development", "dev", "local", "test"}
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 def _app_env() -> str:
     """Return the current runtime environment (defaults to 'production')."""
-    return os.environ.get("AXIOM_ENV", "production").strip().lower()
+    return get_settings().env.lower()
 
 
 def _api_keys() -> set[str]:
     """Read valid API keys from the current environment."""
-    return {k.strip() for k in os.environ.get("AXIOM_API_KEYS", "").split(",") if k.strip()}
+    return {k for k in get_settings().api_keys if k}
 
 
 def _auth_required() -> bool:
     """Return True unless AXIOM_ENV is explicitly set to a non-production value."""
-    return _app_env() not in _NON_PROD_ENVS
+    return get_settings().auth_required()
 
 
 @functools.cache
