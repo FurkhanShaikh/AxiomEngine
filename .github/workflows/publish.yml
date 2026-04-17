@@ -12,8 +12,6 @@ jobs:
   build:
     needs: ci
     runs-on: ubuntu-latest
-    outputs:
-      prerelease: ${{ steps.release-type.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v6
       - name: Install uv
@@ -31,17 +29,6 @@ jobs:
             exit 1
           fi
 
-      - name: Classify release (pre-release vs final)
-        id: release-type
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          # PEP 440 pre-release segments: aN, bN, rcN, .devN, -rcN (loose)
-          if echo "$version" | grep -Eq '(a|b|rc|dev)[0-9]+|-rc'; then
-            echo "prerelease=true"  >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Build package
         run: uv build --no-sources
       - uses: actions/upload-artifact@v4
@@ -49,28 +36,10 @@ jobs:
           name: dist
           path: dist/
 
-  publish-testpypi:
-    if: needs.build.outputs.prerelease == 'true'
-    needs: build
-    runs-on: ubuntu-latest
-    environment: testpypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-      - name: Publish to TestPyPI (idempotent)
-        run: >
-          uv publish
-          --publish-url https://test.pypi.org/legacy/
-          --check-url https://test.pypi.org/simple/
-
   publish-pypi:
-    if: needs.build.outputs.prerelease == 'false'
+    # PEP 440 pre-releases (aN/bN/rcN) publish to PyPI alongside finals —
+    # pip installs only final releases by default, so pre-releases are
+    # opt-in via `pip install <pkg> --pre` or an explicit version pin.
     needs: build
     runs-on: ubuntu-latest
     environment: pypi

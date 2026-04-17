@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0b2] - 2026-04-16
+
 ### Added
 - `GET /v1/status` — operator snapshot (version, uptime, policy, backends, limits). No secrets exposed.
 - `GET /v1/audits/{request_id}` — retrieve the full audit trail for a recent request. Controlled by `AXIOM_AUDIT_RETENTION` (in-memory ring buffer, 0 = disabled).
@@ -46,4 +48,5 @@ First public beta release.
 - **Publish workflow** — tag-triggered release to TestPyPI (rc tags) and PyPI via Trusted Publishing.
 - `tasks.py` developer task runner (install, run, test, lint, format, probe, clean).
 
+[0.1.0b2]: https://github.com/FurkhanShaikh/axiom-rag-engine/releases/tag/v0.1.0b2
 [0.1.0b1]: https://github.com/FurkhanShaikh/axiom-rag-engine/releases/tag/v0.1.0b1
