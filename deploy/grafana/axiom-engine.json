@@ -1,0 +1,162 @@
+{
+  "title": "Axiom Engine — Operations",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "",
+  "refresh": "30s",
+  "tags": ["axiom", "rag"],
+  "time": {"from": "now-6h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {"text": "Prometheus", "value": "Prometheus"}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Requests by status (rate, 5m)",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 0, "y": 0, "w": 8, "h": 5},
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(axiom_requests_by_status_total[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Pipeline duration p50 / p95 / p99",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 8, "y": 0, "w": 16, "h": 7},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(axiom_pipeline_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(axiom_pipeline_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(axiom_pipeline_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "LLM call duration by node + model (p95)",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 0, "y": 7, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, node, model) (rate(axiom_llm_call_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{node}} / {{model}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Graph node duration p95",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 12, "y": 7, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, node) (rate(axiom_node_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Tier assignments (rate, 5m)",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 0, "y": 15, "w": 12, "h": 7},
+      "targets": [
+        {
+          "expr": "sum by (tier) (rate(axiom_tier_assignments_total[5m]))",
+          "legendFormat": "tier {{tier}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Response cache hit ratio",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 12, "y": 15, "w": 12, "h": 7},
+      "targets": [
+        {
+          "expr": "sum(rate(axiom_cache_hits_total[5m])) / (sum(rate(axiom_cache_hits_total[5m])) + sum(rate(axiom_cache_misses_total[5m])))",
+          "legendFormat": "hit ratio"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}}
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Semantic degradations → deterministic Tier 3 (rate, 5m)",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 0, "y": 22, "w": 8, "h": 5},
+      "targets": [
+        {
+          "expr": "sum(rate(axiom_semantic_degradations_total[5m]))",
+          "legendFormat": "degradations/s"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Tier 5 survived all retries (rate, 5m)",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 8, "y": 22, "w": 8, "h": 5},
+      "targets": [
+        {
+          "expr": "sum(rate(axiom_loop_exhausted_tier5_total[5m]))",
+          "legendFormat": "tier5 leaks/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 0.01},
+              {"color": "red", "value": 0.1}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "HTTP 5xx / min",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 16, "y": 22, "w": 8, "h": 5},
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) * 60",
+          "legendFormat": "5xx/min"
+        }
+      ]
+    }
+  ]
+}

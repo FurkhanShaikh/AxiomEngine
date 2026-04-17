@@ -67,6 +67,8 @@ resolved configuration.
 | `AXIOM_CORS_ORIGINS` | _(empty)_ | Comma-separated allowed CORS origins. |
 | `AXIOM_DOCS_ENABLED` | `true` | Set `false` to disable /docs and /redoc. |
 | `AXIOM_SEMANTIC_VERIFICATION_ENABLED` | `true` | Enable/disable Stage 2 semantic verification. |
+| `AXIOM_AUDIT_RETENTION` | `0` | Retain the last N audit trails in memory for `/v1/audits/{id}`. |
+| `AXIOM_LOG_AUDIT_EVENTS` | `false` | Emit each audit event as a structured log line. |
 | `LOG_FORMAT` | `text` | `json` for structured log output. |
 
 See [.env.example](.env.example) for the full list with comments.
@@ -105,6 +107,68 @@ retriever -> scorer -> ranker -> synthesizer -> verifier -+
 axiom-rag-engine serve [--host 0.0.0.0] [--port 8000] [--reload]
 axiom-rag-engine probe "question" [--url URL] [--model MODEL] [--debug]
 axiom-rag-engine check-config [--format text|json]
+axiom-rag-engine audit <request_id> [--url URL] [--api-key KEY] [--json]
+```
+
+## Operations
+
+### Runtime status
+
+`GET /v1/status` returns a JSON snapshot of version, uptime, active policy, and
+configured backends. No secrets are exposed — API keys and Redis URLs are
+reported as booleans.
+
+```bash
+curl http://localhost:8000/v1/status | jq .
+```
+
+Combine with `axiom-rag-engine check-config` to see every `AXIOM_*` value and
+**where it came from** (env var, `.env`, or built-in default).
+
+### Audit trails
+
+Every request emits a full audit trail from each graph node. Two ways to view
+them:
+
+1. **Retained in-process** — set `AXIOM_AUDIT_RETENTION=200` to keep the last
+   N trails in memory. Fetch any one by ID:
+
+   ```bash
+   # HTTP
+   curl -H "X-API-Key: $KEY" http://localhost:8000/v1/audits/<request_id>
+
+   # CLI (human-readable event log)
+   axiom-rag-engine audit <request_id>
+   ```
+
+2. **Streamed to logs** — set `AXIOM_LOG_AUDIT_EVENTS=true` together with
+   `LOG_FORMAT=json` to emit one structured line per audit event, ready to
+   forward to a log aggregator.
+
+The retention store is process-local and bounded — for durable history, use
+the log stream into your existing aggregator.
+
+### Metrics dashboard
+
+`GET /metrics` exposes Prometheus metrics including `axiom_pipeline_duration_seconds`,
+per-node and per-model LLM latency histograms, tier assignment rates, cache
+hit ratio, and verification-degradation counters.
+
+A ready-to-import Grafana dashboard lives at
+[`deploy/grafana/axiom-engine.json`](deploy/grafana/axiom-engine.json) — load it
+from Grafana → Dashboards → Import and select your Prometheus datasource.
+
+### Quick health walk
+
+```bash
+# Liveness (process alive)
+curl -fsS http://localhost:8000/health/live
+
+# Readiness (engine compiled, keys + backend configured)
+curl -fsS http://localhost:8000/health/ready
+
+# Full operator snapshot
+curl -fsS http://localhost:8000/v1/status | jq .
 ```
 
 ## Development

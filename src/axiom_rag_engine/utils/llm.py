@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import os
 from typing import Any
+
+from axiom_rag_engine.config.settings import get_settings
 
 # Default timeout for all LLM calls.  Local models (Ollama) on CPU-only hardware
 # can be slow on large prompts — 600 s is the ceiling; cloud models finish in <10 s.
@@ -24,12 +25,8 @@ _DEFAULT_TIMEOUT: int = 600
 # a single request may consume. Both limits are stored in a mutable dict inside
 # a ContextVar so asyncio.gather children share the same counter object.
 #
-# Call budget defaults to 64: ~3 rewrite loops x (1 synthesizer + up to
-# ~15 semantic citations) leaves a safe margin.
-# Token budget defaults to 0 (unlimited) — set AXIOM_MAX_TOKENS_PER_REQUEST
-# to a dollar-equivalent ceiling for your deployment.
-_DEFAULT_MAX_LLM_CALLS = int(os.environ.get("AXIOM_MAX_LLM_CALLS_PER_REQUEST", "64"))
-_DEFAULT_MAX_TOKENS = int(os.environ.get("AXIOM_MAX_TOKENS_PER_REQUEST", "0"))
+# Values are sourced from Settings (AXIOM_MAX_LLM_CALLS_PER_REQUEST,
+# AXIOM_MAX_TOKENS_PER_REQUEST) at reset time.
 
 # ContextVar holds {"remaining": N, "tokens_used": 0, "token_cap": M} so all
 # tasks created from the same request coroutine share one counter object.
@@ -44,8 +41,9 @@ class LLMBudgetExceededError(RuntimeError):
 
 def reset_llm_budget(max_calls: int | None = None, max_tokens: int | None = None) -> int:
     """Initialize the per-request LLM budgets. Returns the call cap that was set."""
-    cap = max_calls if max_calls is not None else _DEFAULT_MAX_LLM_CALLS
-    token_cap = max_tokens if max_tokens is not None else _DEFAULT_MAX_TOKENS
+    settings = get_settings()
+    cap = max_calls if max_calls is not None else settings.max_llm_calls_per_request
+    token_cap = max_tokens if max_tokens is not None else settings.max_tokens_per_request
     _llm_budget_ctx.set({"remaining": cap, "tokens_used": 0, "token_cap": token_cap})
     return cap
 
@@ -105,12 +103,18 @@ def record_llm_usage(usage: Any, node: str) -> None:
 # This project requires Python >= 3.11, so the old lazy-init pattern that
 # worked around the "no running event loop" error is no longer needed.
 
-_MAX_CONCURRENT_LLM = int(os.environ.get("AXIOM_MAX_CONCURRENT_LLM", "5"))
-_llm_semaphore: asyncio.Semaphore = asyncio.Semaphore(_MAX_CONCURRENT_LLM)
+_llm_semaphore: asyncio.Semaphore | None = None
 
 
 def get_llm_semaphore() -> asyncio.Semaphore:
-    """Return the shared asyncio.Semaphore for LLM concurrency limiting."""
+    """Return the shared asyncio.Semaphore for LLM concurrency limiting.
+
+    Lazily instantiated so tests / callers can change
+    ``AXIOM_MAX_CONCURRENT_LLM`` via env before the first call.
+    """
+    global _llm_semaphore
+    if _llm_semaphore is None:
+        _llm_semaphore = asyncio.Semaphore(get_settings().max_concurrent_llm)
     return _llm_semaphore
 
 
@@ -139,7 +143,7 @@ def build_completion_kwargs(
     }
 
     if model.startswith("ollama/"):
-        kwargs["api_base"] = os.environ.get("OLLAMA_API_BASE", "http://localhost:11434")
+        kwargs["api_base"] = get_settings().ollama_api_base
         # Disable chain-of-thought thinking for Qwen3-family models.
         kwargs["extra_body"] = {"think": False}
     elif json_mode:

@@ -5,10 +5,11 @@ All I/O contracts for the API Gateway and the LangGraph DAG.
 
 from __future__ import annotations
 
-import os as _os
 from typing import Literal
 
 from pydantic import BaseModel, Field, StrictBool, model_validator
+
+from axiom_rag_engine.config.settings import get_settings
 
 # ---------------------------------------------------------------------------
 # INPUT MODELS
@@ -30,23 +31,35 @@ class AppConfig(BaseModel):
             "Use this to demote sources such as 'en.wikipedia.org' from the defaults."
         ),
     )
-
-
-# L6: Allow operators to configure default models via environment variables so
-# model identifiers don't need to change in code when providers deprecate aliases.
-_DEFAULT_SYNTHESIZER_MODEL = _os.environ.get("AXIOM_DEFAULT_SYNTHESIZER_MODEL", "claude-sonnet-4-5")
-_DEFAULT_VERIFIER_MODEL = _os.environ.get("AXIOM_DEFAULT_VERIFIER_MODEL", "gpt-4o-mini")
+    source_weight: float = Field(
+        default=0.4,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Weight applied to the domain-authority score when computing the combined "
+            "chunk score. Paired with ``chunk_weight``; the two should sum to 1.0."
+        ),
+    )
+    chunk_weight: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Weight applied to the chunk content-quality score when computing the "
+            "combined chunk score. Paired with ``source_weight``."
+        ),
+    )
 
 
 class ModelConfig(BaseModel):
     """LiteLLM model identifiers for each pipeline stage."""
 
     synthesizer: str = Field(
-        default_factory=lambda: _DEFAULT_SYNTHESIZER_MODEL,
+        default_factory=lambda: get_settings().default_synthesizer_model,
         description="Heavy model used for answer generation.",
     )
     verifier: str = Field(
-        default_factory=lambda: _DEFAULT_VERIFIER_MODEL,
+        default_factory=lambda: get_settings().default_verifier_model,
         description="Lightweight model used for semantic verification.",
     )
 

@@ -17,12 +17,14 @@ Extracted modules:
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
 import importlib.metadata
 import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -45,6 +47,7 @@ from axiom_rag_engine.api.auth import (
     _auth_required,
     verify_api_key,
 )
+from axiom_rag_engine.audit_store import AuditStore
 from axiom_rag_engine.cache import CacheBackend, MemoryCacheBackend, RedisCacheBackend
 from axiom_rag_engine.config.logging import configure_logging, request_id_ctx
 from axiom_rag_engine.config.observability import (
@@ -249,6 +252,13 @@ async def lifespan(app: FastAPI):
 
     global _response_cache
     settings = get_settings()
+    app.state.started_at = time.time()
+    app.state.audit_store = AuditStore(maxsize=settings.audit_retention)
+    if settings.audit_retention:
+        logger.info(
+            "Audit retention enabled: last %d requests retrievable at /v1/audits/{request_id}.",
+            settings.audit_retention,
+        )
     redis_url = settings.redis_url
     if redis_url:
         try:
@@ -297,12 +307,8 @@ async def lifespan(app: FastAPI):
 
 
 _VERSION = "0.1.0b1-dev"
-for _dist_name in ("axiom-rag-engine", "axiom-rag-engine"):
-    try:
-        _VERSION = importlib.metadata.version(_dist_name)
-        break
-    except importlib.metadata.PackageNotFoundError:
-        continue
+with contextlib.suppress(importlib.metadata.PackageNotFoundError):
+    _VERSION = importlib.metadata.version("axiom-rag-engine")
 
 # Disable interactive API docs in production (AXIOM_DOCS_ENABLED=false).
 _docs_enabled = _startup_settings.docs_enabled
@@ -531,8 +537,140 @@ async def synthesize(
         tier = sentence.get("verification", {}).get("tier", 3)
         TIER_ASSIGNMENTS.labels(tier=str(tier)).inc()
 
+    # Persist the audit trail + optionally emit each event to the logs.
+    _persist_and_emit_audit(payload.request_id, response.status, graph_result)
+
     # Cache successful and partial responses only — not errors or unanswerable.
     if response.status in ("success", "partial"):
         _set_cached(key, response)
 
     return JSONResponse(content=response.model_dump())
+
+
+# ---------------------------------------------------------------------------
+# Audit retention + structured log emission
+# ---------------------------------------------------------------------------
+
+
+def _persist_and_emit_audit(request_id: str, status: str, graph_result: dict[str, Any]) -> None:
+    """Push the audit trail into the in-memory store and (optionally) logs.
+
+    Both operations are best-effort: a retrieval failure on the operator side
+    must never poison the response path.
+    """
+    settings = get_settings()
+    audit_trail = list(graph_result.get("audit_trail") or [])
+
+    store: AuditStore | None = getattr(app.state, "audit_store", None)
+    if store is not None and store.enabled:
+        store.put(
+            request_id,
+            {
+                "request_id": request_id,
+                "status": status,
+                "recorded_at": time.time(),
+                "audit_trail": audit_trail,
+            },
+        )
+
+    if settings.log_audit_events and audit_trail:
+        for event in audit_trail:
+            try:
+                logger.info(
+                    "audit_event",
+                    extra={"axiom_audit": {"request_id": request_id, **event}},
+                )
+            except Exception:
+                # Logging must never poison the response path.
+                logger.exception("Failed to emit audit event for %s", request_id)
+
+
+@app.get(
+    "/v1/audits/{request_id}",
+    summary="Retrieve the audit trail for a recent request.",
+)
+async def get_audit(
+    request_id: str,
+    request: Request,
+    _api_key: str | None = Depends(verify_api_key),
+) -> Response:
+    """Return the retained audit trail for ``request_id`` or 404 if missing.
+
+    Retention is process-local and bounded by ``AXIOM_AUDIT_RETENTION``.
+    """
+    store: AuditStore | None = getattr(request.app.state, "audit_store", None)
+    if store is None or not store.enabled:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "detail": (
+                    "Audit retention is disabled. "
+                    "Set AXIOM_AUDIT_RETENTION to a positive integer to enable."
+                )
+            },
+        )
+    entry = store.get(request_id)
+    if entry is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"No audit trail retained for request_id={request_id!r}."},
+        )
+    return JSONResponse(content=entry)
+
+
+# ---------------------------------------------------------------------------
+# Operator status snapshot
+# ---------------------------------------------------------------------------
+
+
+@app.get("/v1/status", summary="Operator-oriented runtime status snapshot.")
+@limiter.exempt
+async def get_status(request: Request) -> dict[str, Any]:
+    """Summarise the process: version, uptime, policy, and configured backends.
+
+    Intended for ops dashboards and smoke tests. Does not expose secrets —
+    API keys and Redis URLs are reported as booleans only.
+    """
+    settings = get_settings()
+    state = request.app.state
+    started_at = getattr(state, "started_at", None)
+    uptime = (time.time() - started_at) if started_at else 0.0
+    store: AuditStore | None = getattr(state, "audit_store", None)
+
+    return {
+        "service": "axiom-rag-engine",
+        "version": _VERSION,
+        "env": settings.env,
+        "uptime_seconds": round(uptime, 3),
+        "engine_ready": bool(getattr(state, "engine", None)),
+        "search_backend": getattr(state, "search_backend_mode", "unknown"),
+        "auth_required": _auth_required(),
+        "api_keys_configured": bool(_api_keys()),
+        "cache": {
+            "backend": type(_response_cache).__name__,
+            "ttl_seconds": _CACHE_TTL_SECONDS,
+            "max_size": _CACHE_MAX_SIZE,
+            "redis_configured": bool(settings.redis_url),
+        },
+        "audit_retention": {
+            "enabled": bool(store is not None and store.enabled),
+            "capacity": store.capacity if store is not None else 0,
+            "retained": len(store) if store is not None else 0,
+        },
+        "limits": {
+            "rate_limit": settings.rate_limit,
+            "max_body_bytes": _MAX_BODY_BYTES,
+            "max_llm_calls_per_request": settings.max_llm_calls_per_request,
+            "max_tokens_per_request": settings.max_tokens_per_request,
+            "max_concurrent_llm": settings.max_concurrent_llm,
+        },
+        "models": {
+            "synthesizer_default": settings.default_synthesizer_model,
+            "verifier_default": settings.default_verifier_model,
+        },
+        "observability": {
+            "log_format": settings.log_format,
+            "log_audit_events": settings.log_audit_events,
+            "tracing_configured": bool(os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")),
+        },
+    }

@@ -167,6 +167,63 @@ class Settings(BaseSettings):
         default=True,
         description="Server policy for semantic verification (Stage 2).",
     )
+    min_usable_ranking_score: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        description="Pre-LLM threshold — if the best ranking_score is below this, the synthesizer is skipped and is_answerable=false is returned.",
+    )
+
+    # ── LLM budget & concurrency ─────────────────────────────────────────
+    max_llm_calls_per_request: int = Field(
+        default=64,
+        ge=1,
+        description="Hard cap on LLM completions per request.",
+    )
+    max_tokens_per_request: int = Field(
+        default=0,
+        ge=0,
+        description="Hard cap on total LLM tokens per request. 0 = unlimited.",
+    )
+    max_concurrent_llm: int = Field(
+        default=5,
+        ge=1,
+        description="Maximum concurrent in-flight LLM calls across all requests.",
+    )
+    allowed_metric_models: CommaSepList = Field(
+        default_factory=lambda: [
+            # Claude 4.x family
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+            # Claude 4.5 legacy
+            "claude-sonnet-4-5",
+            "claude-opus-4-5",
+            # OpenAI
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4-turbo",
+            # Local (prefix-matched)
+            "ollama",
+        ],
+        description="Models allowed as Prometheus labels. Others are collapsed to 'other' to bound cardinality.",
+    )
+    ollama_api_base: str = Field(
+        default="http://localhost:11434",
+        description="Ollama server URL used when a request specifies ollama/<model>.",
+        alias="OLLAMA_API_BASE",
+    )
+
+    # ── Audit ────────────────────────────────────────────────────────────
+    audit_retention: int = Field(
+        default=0,
+        ge=0,
+        description="Number of recent audit trails to keep in memory for GET /v1/audits/{request_id}. 0 = disabled.",
+    )
+    log_audit_events: bool = Field(
+        default=False,
+        description="When true, every audit event is emitted as a structured log line (best with LOG_FORMAT=json).",
+    )
 
     # ── Security / limits ────────────────────────────────────────────────
     cors_origins: CommaSepList = Field(

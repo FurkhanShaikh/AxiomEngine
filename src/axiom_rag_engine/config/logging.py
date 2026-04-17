@@ -67,6 +67,12 @@ class _JSONFormatter(logging.Formatter):
         if ctx and ctx.trace_id:
             entry["trace_id"] = format(ctx.trace_id, "032x")
             entry["span_id"] = format(ctx.span_id, "016x")
+        # Surface the structured audit payload when present — set via
+        # ``logger.info(..., extra={"axiom_audit": event})`` from main.py when
+        # AXIOM_LOG_AUDIT_EVENTS=true.
+        audit_extra = getattr(record, "axiom_audit", None)
+        if audit_extra is not None:
+            entry["axiom_audit"] = audit_extra
         if record.exc_info and record.exc_info[1]:
             entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(entry, default=str)

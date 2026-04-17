@@ -6,6 +6,7 @@ Call setup_prometheus() and setup_tracing() once at startup in the FastAPI lifes
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 from collections.abc import Callable
@@ -129,30 +130,15 @@ def get_tracer() -> Tracer:
 # footgun that can crash the metrics store.  Anything not in this set is
 # collapsed to "other".
 
-_ALLOWED_LLM_LABEL_MODELS: frozenset[str] = frozenset(
-    os.environ.get(
-        "AXIOM_ALLOWED_METRIC_MODELS",
-        ",".join(
-            [
-                # Claude 4.x family
-                "claude-opus-4-6",
-                "claude-sonnet-4-6",
-                "claude-haiku-4-5-20251001",
-                # Claude 3.x / 4.5 legacy
-                "claude-sonnet-4-5",
-                "claude-opus-4-5",
-                # OpenAI
-                "gpt-4o",
-                "gpt-4o-mini",
-                "gpt-4-turbo",
-                # Local (prefix-matched below)
-                "ollama",
-            ]
-        ),
-    ).split(",")
-)
-
 _LLM_LABEL_OTHER = "other"
+
+
+@functools.cache
+def _allowed_llm_label_models() -> frozenset[str]:
+    """Snapshot allowlist from Settings. Cached so startup cost is paid once."""
+    from axiom_rag_engine.config.settings import get_settings
+
+    return frozenset(get_settings().allowed_metric_models)
 
 
 def safe_model_label(model: str) -> str:
@@ -164,7 +150,7 @@ def safe_model_label(model: str) -> str:
     cardinality bounded while remaining identifiable.  Everything else becomes
     ``"other"``.
     """
-    if model in _ALLOWED_LLM_LABEL_MODELS:
+    if model in _allowed_llm_label_models():
         return model
     if model.startswith("ollama/"):
         return "ollama/…"

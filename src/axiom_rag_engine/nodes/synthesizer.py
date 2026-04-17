@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import time
 from functools import partial
@@ -26,6 +25,7 @@ import litellm
 from pydantic import ValidationError
 
 from axiom_rag_engine.config.observability import LLM_CALL_DURATION, get_tracer, safe_model_label
+from axiom_rag_engine.config.settings import get_settings
 from axiom_rag_engine.models import SynthesizerOutput
 from axiom_rag_engine.state import GraphState
 from axiom_rag_engine.utils.audit import make_audit_event
@@ -259,11 +259,10 @@ def _parse_llm_response(raw: str) -> SynthesizerOutput:
 
 MAX_PARSE_RETRIES = 2  # Category 3 error handling: max 2 attempts on malformed output
 
-# Deterministic pre-LLM guard: if none of the ranked chunks clear this ranking
-# score the retrieval stage has nothing usable, so we skip the synthesizer LLM
-# call entirely and set is_answerable=false. This closes the gap where the
-# escape hatch depended on the LLM voluntarily bailing out.
-_MIN_USABLE_RANKING_SCORE = float(os.environ.get("AXIOM_MIN_USABLE_RANKING_SCORE", "0.15"))
+# Deterministic pre-LLM guard: if none of the ranked chunks clear the usable
+# ranking score the retrieval stage has nothing to answer with, so we skip the
+# synthesizer LLM call entirely and set is_answerable=false. The threshold is
+# sourced from Settings (AXIOM_MIN_USABLE_RANKING_SCORE).
 
 
 def _pre_llm_unanswerable_reason(chunks: list[dict[str, Any]]) -> str | None:
@@ -276,11 +275,12 @@ def _pre_llm_unanswerable_reason(chunks: list[dict[str, Any]]) -> str | None:
     scored = [c for c in chunks if "ranking_score" in c]
     if not scored:
         return None
+    threshold = get_settings().min_usable_ranking_score
     best = max((float(c.get("ranking_score", 0.0) or 0.0) for c in scored), default=0.0)
-    if best < _MIN_USABLE_RANKING_SCORE:
+    if best < threshold:
         return (
             f"Top retrieved chunk ranking_score={best:.3f} is below the "
-            f"minimum usable threshold {_MIN_USABLE_RANKING_SCORE:.2f}."
+            f"minimum usable threshold {threshold:.2f}."
         )
     return None
 
@@ -300,9 +300,7 @@ async def synthesizer_node(state: GraphState) -> dict[str, Any]:
     models_cfg: dict = state.get("models_config") or {}
     app_cfg: dict = state.get("app_config") or {}
 
-    model: str = models_cfg.get(
-        "synthesizer", os.environ.get("AXIOM_DEFAULT_SYNTHESIZER_MODEL", "claude-sonnet-4-5")
-    )
+    model: str = models_cfg.get("synthesizer") or get_settings().default_synthesizer_model
     expertise_level: str = app_cfg.get("expertise_level", "intermediate")
 
     # Prefer pre-ranked chunks; fall back to all indexed chunks when ranker

@@ -5,6 +5,24 @@ All notable changes to Axiom Engine are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `GET /v1/status` — operator snapshot (version, uptime, policy, backends, limits). No secrets exposed.
+- `GET /v1/audits/{request_id}` — retrieve the full audit trail for a recent request. Controlled by `AXIOM_AUDIT_RETENTION` (in-memory ring buffer, 0 = disabled).
+- `axiom-rag-engine audit <request_id>` CLI subcommand — human-readable event log, with `--json` for raw output.
+- `AXIOM_LOG_AUDIT_EVENTS` — when true, every audit event is emitted as a structured log line (pairs with `LOG_FORMAT=json`).
+- `source_weight` / `chunk_weight` on `AppConfig` — formal request-body fields for the ranker weight blend.
+- Pre-built Grafana dashboard at `deploy/grafana/axiom-engine.json` for the exposed Prometheus metrics.
+
+### Changed
+- `check-config` now prints values grouped by section along with the effective source (`env` / `.env` / `default`) and the canonical env var name.
+- All `AXIOM_*` environment reads now flow through `Settings`. Stragglers in `utils/llm.py`, `nodes/synthesizer.py`, `config/observability.py`, and `models.py` were migrated; `max_llm_calls_per_request`, `max_tokens_per_request`, `max_concurrent_llm`, `min_usable_ranking_score`, `allowed_metric_models`, and `ollama_api_base` are now first-class `Settings` fields.
+- `.env.example` regenerated to reflect every new field with comments.
+
+### Fixed
+- Duplicate entry in the package-version discovery list in `main.py`.
+
 ## [0.1.0b1] - 2026-04-15
 
 First public beta release.
