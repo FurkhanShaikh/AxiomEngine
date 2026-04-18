@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from axiom_rag_engine.api.sse import _apply_node_update, _sse, _stage_metadata, stream_pipeline
 from axiom_rag_engine.models import AxiomRequest
-
 
 # ---------------------------------------------------------------------------
 # Unit helpers
@@ -23,8 +21,8 @@ def test_sse_frame_format() -> None:
     assert frame.startswith("event: stage\n")
     assert "id: 3\n" in frame
     assert frame.endswith("\n\n")
-    data_line = [l for l in frame.splitlines() if l.startswith("data:")][0]
-    parsed = json.loads(data_line[len("data:"):])
+    data_line = next(line for line in frame.splitlines() if line.startswith("data:"))
+    parsed = json.loads(data_line[len("data:") :])
     assert parsed["stage"] == "retriever"
 
 
@@ -86,7 +84,7 @@ async def _collect(gen) -> list[dict]:
     async for raw in gen:
         if raw.startswith(":"):
             continue  # keepalive comment
-        data_line = next((l for l in raw.splitlines() if l.startswith("data:")), None)
+        data_line = next((line for line in raw.splitlines() if line.startswith("data:")), None)
         if data_line:
             frames.append(json.loads(data_line[5:]))
     return frames
@@ -112,9 +110,7 @@ async def test_stream_cache_hit_emits_accepted_then_complete() -> None:
         request_id="test-001",
         status="success",
         is_answerable=True,
-        confidence_summary=ConfidenceSummary(
-            overall_score=0.8, tier_breakdown=TierBreakdown()
-        ),
+        confidence_summary=ConfidenceSummary(overall_score=0.8, tier_breakdown=TierBreakdown()),
     )
     payload = _make_payload()
     initial_state = {"request_id": "test-001", "audit_trail": []}  # type: ignore[arg-type]
@@ -151,13 +147,12 @@ async def test_stream_pipeline_emits_stage_events_in_order() -> None:
     # Patch marshal_response so we don't need a real graph result
     with patch("axiom_rag_engine.api.sse.marshal_response") as mock_marshal:
         from axiom_rag_engine.models import AxiomResponse, ConfidenceSummary, TierBreakdown
+
         mock_marshal.return_value = AxiomResponse(
             request_id="test-001",
             status="unanswerable",
             is_answerable=False,
-            confidence_summary=ConfidenceSummary(
-                overall_score=0.0, tier_breakdown=TierBreakdown()
-            ),
+            confidence_summary=ConfidenceSummary(overall_score=0.0, tier_breakdown=TierBreakdown()),
         )
         frames = await _collect(
             stream_pipeline(
@@ -197,13 +192,12 @@ async def test_stream_pipeline_emits_loop_event_on_rewrite() -> None:
 
     with patch("axiom_rag_engine.api.sse.marshal_response") as mock_marshal:
         from axiom_rag_engine.models import AxiomResponse, ConfidenceSummary, TierBreakdown
+
         mock_marshal.return_value = AxiomResponse(
             request_id="test-001",
             status="unanswerable",
             is_answerable=False,
-            confidence_summary=ConfidenceSummary(
-                overall_score=0.0, tier_breakdown=TierBreakdown()
-            ),
+            confidence_summary=ConfidenceSummary(overall_score=0.0, tier_breakdown=TierBreakdown()),
         )
         frames = await _collect(
             stream_pipeline(payload, engine=_mock_engine(events), initial_state=initial_state)  # type: ignore[arg-type]
