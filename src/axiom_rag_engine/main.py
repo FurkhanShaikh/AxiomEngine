@@ -36,7 +36,7 @@ from fastapi import (  # noqa: F401 — HTTPException re-exported for test compa
     Request,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -48,6 +48,7 @@ from axiom_rag_engine.api.auth import (
     _auth_required,
     verify_api_key,
 )
+from axiom_rag_engine.api.sse import stream_pipeline
 from axiom_rag_engine.audit_store import AuditStore
 from axiom_rag_engine.cache import CacheBackend, MemoryCacheBackend, RedisCacheBackend
 from axiom_rag_engine.config.logging import configure_logging, request_id_ctx
@@ -570,6 +571,80 @@ async def synthesize(
     return JSONResponse(content=response.model_dump())
 
 
+@app.post(
+    "/v1/synthesize/stream",
+    summary="Run the Axiom Engine pipeline with SSE progress events.",
+)
+@limiter.limit("20/minute")
+async def synthesize_stream(
+    request: Request,
+    payload: AxiomRequest,
+    _api_key: str | None = Depends(verify_api_key),
+) -> Response:
+    """Stream pipeline progress as Server-Sent Events.
+
+    Same request body as ``POST /v1/synthesize``.  Emits one SSE frame per
+    pipeline stage plus a ``complete`` frame carrying the full AxiomResponse.
+    Sentences appear in ``sentence`` frames only **after** they clear
+    verification — unverified text never reaches the client.
+
+    Disconnect recovery: if the client drops mid-stream the pipeline continues
+    to completion server-side and the full audit trail is persisted and
+    retrievable via ``GET /v1/audits/{request_id}``.
+    """
+    request_id_ctx.set(payload.request_id)
+    effective_app_config = _effective_app_config(payload)
+    effective_pipeline_config = _effective_pipeline_config(payload)
+
+    key = _cache_key(payload, _api_key, effective_app_config, effective_pipeline_config)
+    cached = _get_cached(key, payload.request_id)
+    if cached is not None:
+        CACHE_HITS.inc()
+        REQUESTS_BY_STATUS.labels(status=cached.status).inc()
+    else:
+        CACHE_MISSES.inc()
+        reset_llm_budget()
+
+    initial_state = make_initial_state(
+        request_id=payload.request_id,
+        user_query=payload.user_query,
+        app_config=effective_app_config,
+        models_config=payload.models.model_dump(),
+        pipeline_config=effective_pipeline_config,
+    )
+
+    async def _on_complete(response: AxiomResponse, graph_result: dict[str, Any]) -> None:
+        """Post-pipeline housekeeping: metrics, audit, cache."""
+        REQUESTS_BY_STATUS.labels(status=response.status).inc()
+        for sentence in graph_result.get("final_sentences", []):
+            tier = sentence.get("verification", {}).get("tier", 3)
+            TIER_ASSIGNMENTS.labels(tier=str(tier)).inc()
+        _persist_and_emit_audit(
+            payload.request_id,
+            response.status,
+            graph_result,
+            usage_snapshot=response.usage.model_dump() if response.usage else None,
+        )
+        if response.status in ("success", "partial"):
+            _set_cached(key, response)
+
+    return StreamingResponse(
+        stream_pipeline(
+            payload=payload,
+            engine=app.state.engine,
+            initial_state=initial_state,
+            cached_response=cached,
+            on_complete=_on_complete,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Audit retention + structured log emission
 # ---------------------------------------------------------------------------
@@ -624,6 +699,32 @@ def _persist_and_emit_audit(
             except Exception:
                 # Logging must never poison the response path.
                 logger.exception("Failed to emit audit event for %s", request_id)
+
+
+@app.get(
+    "/v1/audits",
+    summary="List retained audit trail IDs.",
+)
+async def list_audits(
+    request: Request,
+    _api_key: str | None = Depends(verify_api_key),
+) -> Response:
+    """Return all request IDs currently held in the audit retention store.
+
+    Useful for browsing recent requests before fetching a specific trail.
+    Returns an empty list (not 404) when retention is disabled so UI clients
+    can treat the response uniformly.
+    """
+    store: AuditStore | None = getattr(request.app.state, "audit_store", None)
+    enabled = store is not None and store.enabled
+    return JSONResponse(
+        content={
+            "retention_enabled": enabled,
+            "capacity": store.capacity if store is not None else 0,
+            "retained": len(store) if store is not None else 0,
+            "request_ids": store.list_ids() if (enabled and store is not None) else [],
+        }
+    )
 
 
 @app.get(
