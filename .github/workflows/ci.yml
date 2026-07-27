@@ -68,6 +68,10 @@ jobs:
         run: uv python install 3.11
       - name: Install dependencies
         run: uv sync --frozen
+      - name: Download SciFact
+        # The BM25 retrieval gate scores against SciFact, which is gitignored
+        # (evals/data/), so it must be fetched here. ~3 MB, no keys.
+        run: uv run python evals/download_datasets.py
       - name: Regression gates (golden answerability + BM25 retrieval)
         env:
           AXIOM_ENV: development
