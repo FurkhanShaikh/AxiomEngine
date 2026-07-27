@@ -116,7 +116,7 @@ Each tier states exactly what the engine checked — no more.
 | 3 | Model Assisted | Quote is verbatim and faithfully represents the source | Any authority or cross-source claim |
 | 4 | Misrepresented | Quote is verbatim, but the claim distorts what the source says | — |
 | 5 | Hallucinated | Quote was **not found** in the cited chunk | — |
-| 6 | Conflicted | *Not implemented.* Reserved for cross-source contradiction detection; the verifier never assigns this tier today | — |
+| 6 | Conflicted | Each citation is verbatim and faithful, but the cited sources **actively contradict each other** on the claim. Opt-in (`AXIOM_CONTRADICTION_DETECTION_ENABLED`); off by default, so never assigned unless enabled | That either source is wrong — only that they disagree |
 
 Tier 1 and Tier 2 are deterministic judgements about **sources**, computed
 from domain metadata — never inferred by a model. Tiers 3–5 describe the
@@ -141,6 +141,15 @@ distinct sources independently confirm the claim's central fact; sentences whose
 sources merely cover different aspects drop to Tier 3. This adds one verifier
 call per Tier-2-candidate sentence and fails safe (a check error downgrades to
 Tier 3 rather than claiming corroboration it could not verify).
+
+The mirror image is **Tier 6 (Conflicted)**. Set
+`AXIOM_CONTRADICTION_DETECTION_ENABLED=true` and a multi-domain sentence whose
+cited sources *actively contradict* each other (opposite conclusions,
+incompatible figures) is surfaced as Tier 6 instead of a confident Tier 1/2 —
+disagreement is shown, not hidden. It runs first and overrides Tier 1/2, adds one
+verifier call per multi-domain sentence, and fails safe the honest way: a check
+error keeps the original tier rather than asserting a conflict it could not
+verify. Off by default, so Tier 6 is never assigned unless enabled.
 
 ## Hybrid retrieval
 

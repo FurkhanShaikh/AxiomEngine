@@ -262,6 +262,19 @@ class Settings(BaseSettings):
             "Adds one verifier call per Tier-2-candidate sentence."
         ),
     )
+    contradiction_detection_enabled: bool = Field(
+        default=False,
+        description=(
+            "When true, a multi-domain sentence whose cited sources actively "
+            "contradict each other is assigned Tier 6 (Conflicted) instead of "
+            "Tier 1/2 — surfacing source disagreement rather than hiding it behind "
+            "a confident tier (an extra LLM check over the distinct-domain quotes). "
+            "Default false: contradiction is not checked and Tier 6 is never "
+            "assigned. Fails safe — a check error keeps the original tier rather "
+            "than asserting a conflict it could not verify. Adds one verifier call "
+            "per multi-domain sentence."
+        ),
+    )
     min_usable_ranking_score: float = Field(
         default=0.15,
         ge=0.0,

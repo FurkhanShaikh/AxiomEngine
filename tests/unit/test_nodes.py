@@ -374,30 +374,39 @@ def _semantic_fail_json(reason: str) -> str:
 class TestTierClaimsMatchImplementation:
     """Lock the tier claims the README and UI make.
 
-    These are documentation-honesty guards: the docs state that Tier 6 is never
-    assigned and that Tier 2 means multi-domain coverage rather than agreement.
-    If contradiction detection or cross-source entailment ships, these tests are
-    the signal to update README.md, tier-colors.ts, and the tier semantics
-    comment in models.py — not to silently relax the assertion.
+    Documentation-honesty guards. Tier 6 (Conflicted) is now opt-in
+    (AXIOM_CONTRADICTION_DETECTION_ENABLED); the docs and UI state it is off by
+    default and Tier 2 means multi-domain coverage, not agreement. These tests
+    are the signal to keep README.md, tier-colors.ts, and the tier semantics
+    comment in models.py in step with the code — not to silently relax them.
     """
 
-    def test_tier_6_is_never_assigned(self) -> None:
-        """No code path may produce Tier 6 while contradiction detection is unimplemented."""
+    def test_tier_6_only_assigned_by_the_contradiction_gate(self) -> None:
+        """Tier 6 may be constructed in exactly one place — the opt-in gate helper.
+
+        The default pipeline (flag off) never yields Tier 6; guarding that the
+        single ``tier=6`` construction lives in ``_tier6_conflicted`` keeps it
+        from leaking into the default aggregation path. The behavioral default-off
+        case is covered by ``test_two_domains_without_agreement_check_is_tier_2``
+        (below) and ``test_contradiction.py::test_disabled_by_default_no_tier6``.
+        """
         source = Path(semantic_module.__file__).read_text(encoding="utf-8")
-        # Match a tier=6 kwarg on any VerificationResult construction.
-        assert not re.search(r"\btier\s*=\s*6\b", source), (
-            "semantic.py assigns Tier 6, but the schema, README, and UI all state "
-            "it is never assigned. Ship contradiction detection and update those "
-            "claims together, or remove the assignment."
+        tier6_constructions = re.findall(r"\btier\s*=\s*6\b", source)
+        assert len(tier6_constructions) == 1, (
+            "Tier 6 must be constructed in exactly one place (_tier6_conflicted). "
+            f"Found {len(tier6_constructions)} — a stray tier=6 risks assigning "
+            "Conflicted by default, which the README and UI say never happens."
         )
+        assert "_tier6_conflicted" in source
 
     async def test_two_domains_without_agreement_check_is_tier_2(self) -> None:
         """Tier 2 must key off distinct domains only — it must not verify agreement.
 
-        Both chunks below assert *contradictory* facts. Tier 2 is still correct
-        today precisely because no cross-source comparison happens; this test
-        documents that limitation rather than endorsing it. When entailment
-        lands (roadmap 2.2), this case should become Tier 6 or drop to Tier 3.
+        Both chunks below assert *contradictory* facts. With contradiction
+        detection OFF (the default), Tier 2 is still correct precisely because no
+        cross-source comparison happens — this documents the default limitation.
+        Enabling AXIOM_CONTRADICTION_DETECTION_ENABLED would instead surface this
+        as Tier 6 (see test_contradiction.py).
         """
         chunks = [
             {

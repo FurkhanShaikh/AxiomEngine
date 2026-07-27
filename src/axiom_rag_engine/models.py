@@ -194,10 +194,12 @@ class SynthesizerOutput(BaseModel):
 #   3 Model Assisted — mechanical pass; semantic check passed or disabled.
 #   4 Misrepresented — mechanical pass; semantic fail (context stripped/inverted).
 #   5 Hallucinated   — mechanical fail (quote does not exist in the cited chunk).
-#   6 Conflicted     — NOT IMPLEMENTED. Reserved for cross-source contradiction
-#                      detection. The verifier never assigns this tier today; it
-#                      remains in the schema so the contract is stable when it
-#                      ships. Treat any Tier 6 in a response as a bug.
+#   6 Conflicted     — mechanical + semantic pass on each citation, but the cited
+#                      sources actively contradict each other on the claim. Opt-in:
+#                      assigned only when AXIOM_CONTRADICTION_DETECTION_ENABLED is
+#                      set (an LLM check over the distinct-domain quotes). Off by
+#                      default → never assigned. Overrides Tier 1/2 when a conflict
+#                      is found — surfacing disagreement beats a confident tier.
 
 VerificationTier = Literal[1, 2, 3, 4, 5, 6]
 

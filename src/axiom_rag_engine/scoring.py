@@ -16,7 +16,9 @@ from axiom_rag_engine.models import ConfidenceSummary, TierBreakdown
 #   Tier 3 (Model Assisted)   → 0.60
 #   Tier 4 (Misrepresented)   → 0.20  (should rarely survive to final output)
 #   Tier 5 (Hallucinated)     → 0.00  (should never survive to final output)
-#   Tier 6 (Conflicted)       → 0.40  (unreachable — never assigned today)
+#   Tier 6 (Conflicted)       → 0.40  (opt-in; below Tier 3 — conflicting sources
+#                                       are worse than a single faithful one, but
+#                                       above a misrepresentation)
 _TIER_WEIGHTS: dict[int, float] = {
     1: 1.0,
     2: 0.85,
