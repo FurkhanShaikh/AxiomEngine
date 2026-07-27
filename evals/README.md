@@ -76,6 +76,12 @@ python tasks.py evals retrieval -- --limit 0       # BM25, all 188 labeled claim
 python tasks.py evals retrieval -- --method dense  --limit 0
 python tasks.py evals retrieval -- --method hybrid --limit 0
 
+# Reranking — re-order the base ranker's top-K with an LLM relevance grader.
+# Needs a chat model (LiteLLM); grades are disk-cached so re-runs are cheap.
+# Slow with local thinking models (~26s/grade); see BENCHMARKS.md for the lift.
+python tasks.py evals retrieval -- --method rerank --rerank-base bm25 --limit 30
+python tasks.py evals retrieval -- --method rerank --rerank-base hybrid --rerank-depth 20
+
 # Layer 4 — bring-your-own-corpus retrieval (production ingest → store → search)
 # Ingests the dataset through the real corpus pipeline, then scores doc-level
 # recall. Needs a live embedding model (LiteLLM); not cached, so ingestion re-embeds.

@@ -207,6 +207,27 @@ class Settings(BaseSettings):
         ge=1,
         description="Reciprocal-rank-fusion constant for hybrid retrieval. 60 is the RRF-paper default.",
     )
+    reranker_model: str | None = Field(
+        default=None,
+        description=(
+            "LiteLLM chat model for second-stage reranking (e.g. 'gpt-4o-mini'). "
+            "When set, the ranker regrades the top AXIOM_RERANK_TOP_K candidates "
+            "(query+passage judged together) and reorders by relevance before "
+            "trimming — lifting precision@k. Unset (default) = no reranking. Adds "
+            "up to AXIOM_RERANK_TOP_K LLM calls per request; pick a *fast* model "
+            "(a local thinking model adds seconds per candidate). Fails open to "
+            "the pre-rerank order on any error. See BENCHMARKS.md."
+        ),
+    )
+    rerank_top_k: int = Field(
+        default=20,
+        ge=1,
+        description=(
+            "How many top candidates the reranker regrades. Must exceed "
+            "max_ranked_chunks to change which chunks survive the trim; candidates "
+            "below this depth keep their pre-rerank order."
+        ),
+    )
 
     # ── Corpus (bring-your-own documents) ────────────────────────────────
     corpus_db_path: str | None = Field(

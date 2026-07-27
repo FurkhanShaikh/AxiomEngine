@@ -163,6 +163,59 @@ a production-grade embedder plus a re-run of these evals to size the real margin
 The machinery is in place: `retrieval_eval.py --method hybrid`, pluggable
 embedder, and BEIR/paraphrase datasets to measure on.
 
+#### Reranking — does a second-stage LLM re-order help?
+
+A reranker re-scores the base ranker's top-K candidates with a model that sees
+the query and passage *together* (a cross-encoder-style judgement), rather than
+comparing independent vectors. `retrieval_eval.py --method rerank` grades each
+(query, passage) pair 0–3 with a LiteLLM model and reorders by grade, keeping the
+base order as a stable tiebreak — so it is a *refinement* of the base ranking,
+never a reshuffle, and cannot change recall@k for k ≥ the rerank depth.
+
+Matched 15-query paraphrased SciFact sample (same seed), reranking **BM25's
+top-15** with `ollama/gemma4:e4b`:
+
+| method | recall@1 | recall@5 | recall@10 | recall@20 | nDCG@10 | MRR |
+|---|---|---|---|---|---|---|
+| BM25 (base) | 0.600 | 0.767 | 0.783 | 0.850 | 0.710 | 0.697 |
+| hybrid | 0.683 | 0.850 | 0.850 | **0.933** | 0.792 | **0.795** |
+| **rerank (BM25 base)** | **0.733** | 0.850 | 0.850 | 0.850 | **0.806** | 0.791 |
+
+**Finding: reranking lifts precision substantially.** Over its BM25 base, rerank
+gains nDCG@10 **+0.096** (0.710 → 0.806), recall@1 **+0.133** (0.600 → 0.733), and
+MRR **+0.094** — pulling the right document to the *top*, exactly what a reranker
+should do. It matches or slightly beats hybrid on every precision metric
+(nDCG@10, recall@1) and ties on MRR.
+
+**Structural limit: reranking cannot fix recall.** Rerank's recall@20 (0.850)
+equals BM25's ceiling because it only reorders what BM25 retrieved — it can never
+recover a gold document the base ranker missed entirely, which is why hybrid's
+dense recall still wins recall@20 (0.933). The two techniques are complementary:
+**hybrid widens the candidate net, reranking sharpens the top of it.** Reranking
+*hybrid's* top-K (rather than BM25's) is the natural best-of-both, and the eval
+supports it via `--rerank-base hybrid`.
+
+**Cost reality (load-bearing for production).** This run made 225 grading calls
+in **5,871 s — ~26 s per call** with a local *thinking* model (`gemma4:e4b` emits
+a hidden reasoning trace before the digit; Ollama serializes requests, so the two
+worker threads do not parallelize). That is fine for an offline eval but a
+non-starter for a live API: reranking 15 candidates would add minutes of latency
+per request. **The production reranker must be fast** — a hosted rerank/cross-
+encoder API (Cohere, Voyage) or a small non-thinking model — not a local thinking
+model. The quality signal is what generalizes here; the model choice does not.
+
+**Caveats.** n = 15 is a small sample (chosen because each query costs ~6 min of
+local grading), so treat the exact deltas as directional. The direction is robust
+and matches the IR literature (second-stage reranking reliably improves
+precision@k). Grades are disk-cached (`evals/data/rerank_cache/`, gitignored) so
+re-runs and larger samples are incremental. Not gated: reranking needs an LLM.
+
+**Recommendation.** Ship the reranker as an **opt-in** production stage
+(`AXIOM_RERANKER_MODEL`, default off, fail-open to the base order), pointed at a
+fast model the operator chooses — the same pattern as the synthesizer/verifier.
+The eval justifies the feature; latency justifies keeping it off by default and
+model-agnostic.
+
 ### Verification
 
 > **Not yet recorded for the production model.** The semantic table is populated

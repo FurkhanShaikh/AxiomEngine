@@ -153,3 +153,109 @@ class TestSummary:
         }
         metrics = reval._gate_metrics(s)
         assert set(metrics) == {"recall_at_10", "recall_at_20", "ndcg_at_10", "mrr"}
+
+
+class TestParseRerankGrade:
+    def test_plain_digit(self) -> None:
+        assert reval.parse_rerank_grade("2") == 2
+
+    def test_prose_around_digit(self) -> None:
+        assert reval.parse_rerank_grade("Score: 3 (directly answers)") == 3
+
+    def test_think_block_stripped(self) -> None:
+        assert reval.parse_rerank_grade("<think>2 or 3? passage is vague</think>\n1") == 1
+
+    def test_code_fence_stripped(self) -> None:
+        assert reval.parse_rerank_grade("```\n0\n```") == 0
+
+    def test_out_of_range_digit_rejected(self) -> None:
+        with pytest.raises(ValueError, match="no 0-3 grade"):
+            reval.parse_rerank_grade("7")
+
+    def test_multi_digit_not_matched(self) -> None:
+        # "10" must not match as 1 or 0 — the grade must be a standalone digit.
+        with pytest.raises(ValueError, match="no 0-3 grade"):
+            reval.parse_rerank_grade("10")
+
+    def test_garbage_rejected(self) -> None:
+        with pytest.raises(ValueError, match="no 0-3 grade"):
+            reval.parse_rerank_grade("the passage is relevant")
+
+
+class _FixedBase:
+    """Base ranker returning a fixed order regardless of query."""
+
+    def __init__(self, order: list[str]) -> None:
+        self._order = order
+
+    def rank(self, query: str) -> list[str]:
+        return list(self._order)
+
+
+class TestLLMReranker:
+    """Plumbing tests with an injected deterministic grader — no LLM involved."""
+
+    def _corpus(self) -> object:
+        ids = ["a", "b", "c", "d", "e"]
+        texts = [f"passage {i}" for i in ids]
+        return reval.Corpus(doc_ids=ids, texts=texts)
+
+    def test_reorders_head_by_grade_desc(self) -> None:
+        grades = {"passage a": 0, "passage b": 1, "passage c": 3, "passage d": 2}
+
+        def score(query: str, passage: str) -> int:
+            return grades.get(passage, 0)
+
+        rr = reval.LLMReranker(
+            _FixedBase(["a", "b", "c", "d", "e"]),
+            self._corpus(),
+            model="fake",
+            depth=4,
+            score_fn=score,
+        )
+        # Head a,b,c,d reranked by grade (c=3, d=2, b=1, a=0); tail e untouched.
+        assert rr.rank("q") == ["c", "d", "b", "a", "e"]
+
+    def test_ties_preserve_base_order(self) -> None:
+        rr = reval.LLMReranker(
+            _FixedBase(["a", "b", "c", "d", "e"]),
+            self._corpus(),
+            model="fake",
+            depth=5,
+            score_fn=lambda q, p: 2,  # all equal -> refinement must be a no-op
+        )
+        assert rr.rank("q") == ["a", "b", "c", "d", "e"]
+
+    def test_tail_beyond_depth_untouched(self) -> None:
+        rr = reval.LLMReranker(
+            _FixedBase(["a", "b", "c", "d", "e"]),
+            self._corpus(),
+            model="fake",
+            depth=2,
+            score_fn=lambda q, p: 3 if "b" in p else 0,
+        )
+        ranked = rr.rank("q")
+        assert ranked[:2] == ["b", "a"]  # head reranked
+        assert ranked[2:] == ["c", "d", "e"]  # tail order exactly as base
+
+    def test_empty_base_order(self) -> None:
+        rr = reval.LLMReranker(
+            _FixedBase([]),
+            reval.Corpus(doc_ids=[], texts=[]),
+            model="fake",
+            depth=5,
+            score_fn=lambda q, p: 1,
+        )
+        assert rr.rank("q") == []
+
+    def test_gold_doc_rescued_from_bottom_of_head(self) -> None:
+        """The point of reranking: a relevant doc the base ranker buried at the
+        bottom of the head rises to the top."""
+        rr = reval.LLMReranker(
+            _FixedBase(["a", "b", "c", "d", "e"]),
+            self._corpus(),
+            model="fake",
+            depth=5,
+            score_fn=lambda q, p: 3 if p == "passage e" else 1,
+        )
+        assert rr.rank("q")[0] == "e"

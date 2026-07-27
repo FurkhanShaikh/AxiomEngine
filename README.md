@@ -181,6 +181,35 @@ and `ranker_complete` reports `ranking_mode` (`bm25` or `hybrid`).
 call over the query plus its retrieved chunks. A hosted embedder adds ~100–300 ms;
 a local Ollama model is slower but free.
 
+### Reranking
+
+Optionally add a **second-stage reranker** that re-scores the top candidates with
+a model that judges query and passage *together* — the standard way to sharpen
+the top of a result list. Set `AXIOM_RERANKER_MODEL` to a LiteLLM chat model:
+
+```bash
+export AXIOM_RERANKER_MODEL=gpt-4o-mini   # any LiteLLM chat model
+export AXIOM_RERANK_TOP_K=20              # regrade the top 20, then trim
+```
+
+The reranker grades each of the top `AXIOM_RERANK_TOP_K` chunks 0–3 for relevance
+and reorders by grade — running *after* BM25/hybrid and *before* the trim, so a
+strong chunk the base ranker buried below the cutoff can still reach the answer.
+It is a **refinement**: equal grades keep the base order, `ranking_score` is left
+untouched (only the order changes, plus a per-chunk `rerank_grade`), and
+`ranker_complete` reports `ranking_mode` as `…+rerank`.
+
+**Measured lift.** On a vocabulary-mismatch sample, reranking BM25's top-K raised
+nDCG@10 by ~0.10 and recall@1 by ~0.13, matching or beating hybrid on precision —
+see [BENCHMARKS.md](BENCHMARKS.md). Reranking cannot improve deep recall (it only
+reorders what was retrieved), so pairing it with hybrid (which widens the net) is
+the natural combination.
+
+**Cost & safety.** Reranking adds up to `AXIOM_RERANK_TOP_K` LLM calls per request
+(graded concurrently), so **pick a fast model** — a local *thinking* model adds
+seconds per candidate. It is off by default and **fails open**: a grading error
+sinks that one candidate, and a total failure keeps the base order untouched.
+
 ## Document ingestion (bring-your-own corpus)
 
 Axiom can answer over **your own documents**, not just the live web. Ingested

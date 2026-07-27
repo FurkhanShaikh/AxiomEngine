@@ -29,13 +29,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
 import random
+import re
 import sys
+import threading
 import time
 from collections import Counter
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -385,7 +390,183 @@ class HybridRanker:
         return sorted(scores, key=lambda d: (-scores[d], d))
 
 
-_METHODS = ("bm25", "dense", "hybrid")
+# ---------------------------------------------------------------------------
+# LLM reranking (pointwise graded relevance over the base ranker's top-K)
+# ---------------------------------------------------------------------------
+
+# Folded into the score cache key so editing the prompt invalidates cached grades.
+_RERANK_PROMPT_VERSION = "v1"
+
+_RERANK_SYSTEM_PROMPT = """\
+You grade how relevant a passage is to a search query.
+
+Reply with ONLY one integer, nothing else:
+  3 = the passage directly answers or verifies the query
+  2 = the passage addresses the query's topic with substantive related evidence
+  1 = the passage is loosely related to the topic
+  0 = the passage is irrelevant to the query
+"""
+
+_RERANK_USER_TEMPLATE = """\
+QUERY: {query}
+
+PASSAGE:
+{passage}
+
+Relevance grade (0-3), one integer only:"""
+
+# Passages are capped so one long abstract can't dominate latency; SciFact and
+# ArguAna docs almost always fit.
+_RERANK_MAX_PASSAGE_CHARS = 2_000
+# Local graders (gemma4:e4b, qwen3.5:9b) are *thinking* models: they emit a
+# hidden reasoning trace (~250-700 tokens) before the final digit. Ollama strips
+# the <think> block, but the budget must still cover it or the reply is truncated
+# to empty. 2048 comfortably covers both; the parser also strips any inline
+# <think> for models that don't hide it.
+_RERANK_MAX_TOKENS = 2048
+_RERANK_CACHE_DIR = EVALS_DIR / "data" / "rerank_cache"
+
+_GRADE_RE = re.compile(r"\b([0-3])\b")
+
+
+def parse_rerank_grade(raw: str) -> int:
+    """Extract the 0-3 grade from an LLM reply. Raises ValueError on garbage.
+
+    Tolerates thinking blocks, code fences, and prose like "Score: 2" — the
+    first standalone digit 0-3 after cleanup wins.
+    """
+    clean = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    clean = re.sub(r"```[a-z]*", "", clean).strip()
+    match = _GRADE_RE.search(clean)
+    if match is None:
+        raise ValueError(f"no 0-3 grade in reranker reply: {raw[:120]!r}")
+    return int(match.group(1))
+
+
+class LLMReranker:
+    """Rerank a base ranker's top-``depth`` candidates by pointwise LLM grading.
+
+    Each (query, candidate) pair is graded 0-3 by the model; candidates are
+    reordered by grade descending with the base order as tiebreak, so equal
+    grades preserve the base ranking (the reranker is a *refinement*, never a
+    shuffle). Docs beyond ``depth`` keep their base order unchanged — which
+    also means recall@k for k >= depth is mathematically unchanged; the lift
+    to look for is in nDCG@10, MRR, and shallow recall.
+
+    Grades are cached to disk keyed by (model, prompt version, query, passage),
+    so re-runs and cross-method comparisons over the same sample are free.
+
+    ``score_fn`` injects a deterministic grader for unit tests; production runs
+    default to a LiteLLM completion per pair (temperature 0).
+    """
+
+    def __init__(
+        self,
+        base: Ranker,
+        corpus: Corpus,
+        model: str,
+        depth: int = 30,
+        workers: int = 4,
+        score_fn: Callable[[str, str], int] | None = None,
+    ) -> None:
+        self._base = base
+        self._texts = dict(zip(corpus.doc_ids, corpus.texts, strict=True))
+        self._model = model
+        self._depth = depth
+        self._workers = max(1, workers)
+        self._score_fn = score_fn
+        self.stats = {"llm_calls": 0, "cache_hits": 0, "parse_failures": 0}
+        self._lock = threading.Lock()
+        self._cache: dict[str, int] = {}
+        self._cache_path: Path | None = None
+        if score_fn is None:
+            _RERANK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            slug = model.replace("/", "_").replace(":", "_")
+            self._cache_path = _RERANK_CACHE_DIR / f"{slug}.jsonl"
+            if self._cache_path.exists():
+                for line in self._cache_path.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        row = json.loads(line)
+                        self._cache[row["k"]] = int(row["s"])
+
+    def prewarm_queries(self, queries: list[str]) -> None:
+        prewarm = getattr(self._base, "prewarm_queries", None)
+        if prewarm is not None:
+            prewarm(queries)
+
+    # -- grading ------------------------------------------------------------
+
+    def _cache_key(self, query: str, passage: str) -> str:
+        h = hashlib.sha256()
+        for part in (self._model, _RERANK_PROMPT_VERSION, query, passage):
+            h.update(part.encode("utf-8"))
+            h.update(b"\x00")
+        return h.hexdigest()[:32]
+
+    def _llm_grade(self, query: str, passage: str) -> int:
+        import litellm
+
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": _RERANK_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": _RERANK_USER_TEMPLATE.format(query=query, passage=passage),
+                },
+            ],
+            "temperature": 0.0,
+            "max_tokens": _RERANK_MAX_TOKENS,
+        }
+        if self._model.startswith("ollama/"):
+            kwargs["api_base"] = os.environ.get("OLLAMA_API_BASE", "http://localhost:11434")
+        response = litellm.completion(**kwargs)
+        raw = response.choices[0].message.content or ""
+        return parse_rerank_grade(raw)
+
+    def _grade(self, query: str, doc_id: str) -> int:
+        """Grade one pair; parse/call failures degrade to 0 and are counted."""
+        passage = self._texts.get(doc_id, "")[:_RERANK_MAX_PASSAGE_CHARS]
+        if self._score_fn is not None:
+            return self._score_fn(query, passage)
+        key = self._cache_key(query, passage)
+        with self._lock:
+            if key in self._cache:
+                self.stats["cache_hits"] += 1
+                return self._cache[key]
+        try:
+            grade = self._llm_grade(query, passage)
+        except Exception:
+            with self._lock:
+                self.stats["parse_failures"] += 1
+            return 0
+        with self._lock:
+            self.stats["llm_calls"] += 1
+            self._cache[key] = grade
+            if self._cache_path is not None:
+                with self._cache_path.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"k": key, "s": grade}) + "\n")
+        return grade
+
+    # -- ranking ------------------------------------------------------------
+
+    def rank(self, query: str) -> list[str]:
+        base_order = self._base.rank(query)
+        head = base_order[: self._depth]
+        tail = base_order[self._depth :]
+        if not head:
+            return base_order
+        if self._workers > 1 and self._score_fn is None:
+            with ThreadPoolExecutor(max_workers=self._workers) as pool:
+                grades = list(pool.map(lambda d: self._grade(query, d), head))
+        else:
+            grades = [self._grade(query, d) for d in head]
+        # Grade descending; base rank as tiebreak (stable refinement).
+        order = sorted(range(len(head)), key=lambda i: (-grades[i], i))
+        return [head[i] for i in order] + tail
+
+
+_METHODS = ("bm25", "dense", "hybrid", "rerank")
 _NEEDS_EMBEDDER = frozenset({"dense", "hybrid"})
 
 
@@ -487,6 +668,11 @@ def run(
     gate_baseline: Path | None,
     embed_model: str,
     paraphrased: bool = False,
+    *,
+    rerank_model: str = "ollama/gemma4:e4b",
+    rerank_depth: int = 30,
+    rerank_base: str = "bm25",
+    rerank_workers: int = 4,
 ) -> int:
     corpus, queries = load_dataset(dataset, paraphrased=paraphrased)
     query_kind = "paraphrased" if paraphrased else "original"
@@ -500,7 +686,7 @@ def run(
     sample = queries[:limit] if limit else queries
 
     embedder: OllamaEmbedder | None = None
-    if method in _NEEDS_EMBEDDER:
+    if method in _NEEDS_EMBEDDER or (method == "rerank" and rerank_base in _NEEDS_EMBEDDER):
         from _env import load_dotenv
 
         load_dotenv()
@@ -515,7 +701,18 @@ def run(
         _echo(f"Embedder: {embed_model} @ {base}" + (" (nomic prefixes)" if doc_prefix else ""))
 
     _echo(f"Building {method} index over {len(corpus.doc_ids)} docs ...")
-    ranker: Ranker = build_ranker(method, corpus, embedder)
+    ranker: Ranker
+    if method == "rerank":
+        base = build_ranker(rerank_base, corpus, embedder)
+        ranker = LLMReranker(
+            base, corpus, model=rerank_model, depth=rerank_depth, workers=rerank_workers
+        )
+        _echo(
+            f"Reranker: {rerank_model} over top-{rerank_depth} of {rerank_base} "
+            f"({rerank_workers} workers, disk-cached grades)"
+        )
+    else:
+        ranker = build_ranker(method, corpus, embedder)
 
     # Pre-embed all query vectors in one batched pass rather than 188 serial
     # calls; a no-op for BM25.
@@ -526,7 +723,9 @@ def run(
     _echo(f"Ranking {len(sample)} claims ...")
     start = time.monotonic()
     results: list[QueryResult] = []
-    for q in sample:
+    for qi, q in enumerate(sample):
+        if method == "rerank" and qi and qi % 10 == 0:
+            _echo(f"  ... {qi}/{len(sample)} queries ({time.monotonic() - start:.0f}s)")
         ranked = ranker.rank(q.text)
         first_hit = next((i for i, d in enumerate(ranked) if d in q.relevant_doc_ids), None)
         results.append(
@@ -580,6 +779,12 @@ def run(
     _echo(f"  nDCG@10      : {summary['ndcg_at_10']}")
     _echo(f"  MRR          : {summary['mrr']}")
     _echo(f"  ranked {len(sample)} claims in {elapsed:.1f}s")
+    if isinstance(ranker, LLMReranker):
+        s = ranker.stats
+        _echo(
+            f"  rerank stats : {s['llm_calls']} LLM calls, {s['cache_hits']} cache hits, "
+            f"{s['parse_failures']} failures (failed pairs grade 0)"
+        )
     _echo(f"Full records: {out_path}")
 
     if gate_baseline is not None:
@@ -614,6 +819,29 @@ def main() -> None:
         "original claims — the controlled vocabulary-mismatch A/B.",
     )
     parser.add_argument(
+        "--rerank-model",
+        default="ollama/gemma4:e4b",
+        help="LiteLLM model that grades (query, passage) relevance for --method rerank.",
+    )
+    parser.add_argument(
+        "--rerank-depth",
+        type=int,
+        default=30,
+        help="Rerank the base ranker's top-K candidates (recall@k for k>=K is unchanged).",
+    )
+    parser.add_argument(
+        "--rerank-base",
+        default="bm25",
+        choices=("bm25", "dense", "hybrid"),
+        help="Base ranking whose top-K is reranked.",
+    )
+    parser.add_argument(
+        "--rerank-workers",
+        type=int,
+        default=4,
+        help="Concurrent grading calls per query.",
+    )
+    parser.add_argument(
         "--gate",
         nargs="?",
         const=str(BASELINE_PATH),
@@ -632,6 +860,10 @@ def main() -> None:
             baseline,
             args.embed_model,
             paraphrased=args.paraphrased,
+            rerank_model=args.rerank_model,
+            rerank_depth=args.rerank_depth,
+            rerank_base=args.rerank_base,
+            rerank_workers=args.rerank_workers,
         )
     )
 

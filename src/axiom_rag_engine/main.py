@@ -1322,6 +1322,8 @@ async def get_status(request: Request) -> dict[str, Any]:
             "ranking_mode": "hybrid" if settings.embedding_model else "bm25",
             "embedding_model": settings.embedding_model,
             "rrf_k": settings.rrf_k,
+            "reranker_model": settings.reranker_model,
+            "rerank_top_k": settings.rerank_top_k if settings.reranker_model else None,
             "source": settings.retrieval_source,
             "corpus": (
                 state.corpus_store.stats().as_dict()
